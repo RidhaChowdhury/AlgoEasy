@@ -1,6 +1,7 @@
 import { useLocation } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import axios from "axios"; // Import axios
 import axios from "axios";
 import { PlayCircle } from "lucide-react";
 import {
@@ -42,10 +43,36 @@ hello_world()
     console.log("Editor is mounted and available:", editor);
   };
 
+  // Function to execute the code by sending it to the FastAPI backend using axios
+  const executeCode = async () => {
   // Function to print the code from the editor to the console
   const printCode = () => {
     if (editorRef.current) {
       const currentCode = editorRef.current.getValue();
+
+      try {
+        const response = await axios.post("http://localhost:8000/execute/", {
+          code: currentCode,
+        });
+
+        const result = response.data;
+        console.log("Execution result:", result);
+
+        // Log both stdout and stderr to the console
+        if (result.stdout && result.stdout.length > 0) {
+          result.stdout.forEach((output: any) => {
+            console.log(`[${output.timestamp}] ${output.output}`);
+          });
+        }
+
+        if (result.stderr && result.stderr.length > 0) {
+          result.stderr.forEach((error: any) => {
+            console.error(`[${error.timestamp}] ${error.error}`);
+          });
+        }
+      } catch (error) {
+        console.error("Error during code execution:", error);
+      }
       console.log("Current code in editor:", currentCode);
     } else {
       console.error("Test cases are still loading");
