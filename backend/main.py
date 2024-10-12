@@ -2,12 +2,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import subprocess
+<<<<<<< HEAD
 import os
 import time
 import json
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
+=======
+import time
+import re
+>>>>>>> 8fd65ac (Backend subprocess handler)
 
 # Set up the database connection
 DATABASE_URL = "postgresql://postgres:yourpassword@localhost:5432/problems_db"
@@ -48,6 +53,7 @@ app.add_middleware(
     allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
     allow_headers=["*"],  # Allow all headers
 )
+<<<<<<< HEAD
 
 # Define the Pydantic model for code execution requests
 class CodeExecutionRequest(BaseModel):
@@ -130,11 +136,33 @@ def execute_code(request: CodeExecutionRequest):
     try:
         process = subprocess.Popen(
             ["python", "code_runner.py", temp_test_case_file],
+=======
+
+class CodeExecutionRequest(BaseModel):
+    code: str
+
+@app.get("/")
+def read_root():
+    return {"message": "Backend is responding!"}
+
+@app.post("/execute/")
+def execute_code(request: CodeExecutionRequest):
+    # Save the code to a temporary file
+    temp_code_file = "temp_code.py"
+    with open(temp_code_file, "w") as f:
+        f.write(request.code)
+
+    # Run the code with subprocess and capture output and errors
+    try:
+        process = subprocess.Popen(
+            ["python", temp_code_file],
+>>>>>>> 8fd65ac (Backend subprocess handler)
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True
         )
 
+<<<<<<< HEAD
         stdout, stderr = process.communicate()
 
         result = {
@@ -167,10 +195,50 @@ def execute_code(request: CodeExecutionRequest):
                 })
 
         print(result)
+=======
+        # Capture stdout and stderr
+        stdout, stderr = process.communicate()
+
+        # Update the timestamp to only show time (HH:MM:SS)
+        result = {
+            "stdout": [],
+            "stderr": [],
+        }
+
+        # Split and tag each line of stdout
+        if stdout:
+            for line in stdout.splitlines():
+                result["stdout"].append({
+                    "timestamp": time.strftime("%H:%M:%S", time.localtime()),  # Time only
+                    "output": line
+                })
+
+        # Process stderr to group multiple errors separately
+        if stderr:
+            # Split the stderr by the "Traceback" keyword to capture separate error blocks
+            error_blocks = re.split(r'(Traceback \(most recent call last\):)', stderr)
+            grouped_errors = []
+            
+            # Iterate through the blocks and combine traceback with following lines
+            for i in range(1, len(error_blocks), 2):
+                traceback_start = error_blocks[i].strip()
+                traceback_content = error_blocks[i + 1].strip() if i + 1 < len(error_blocks) else ""
+                full_error = traceback_start + "\n" + traceback_content
+                grouped_errors.append(full_error)
+
+            # Add each error block with a timestamp
+            for error in grouped_errors:
+                result["stderr"].append({
+                    "timestamp": time.strftime("%H:%M:%S", time.localtime()),  # Time only
+                    "error": error.strip()  # Aggregate the entire error block
+                })
+
+>>>>>>> 8fd65ac (Backend subprocess handler)
         return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+<<<<<<< HEAD
 
     finally:
         # Clean up the temporary user code file and test case file
@@ -216,3 +284,5 @@ def create_test_case(test_case_request: TestCaseRequest):
     db.commit()
     db.refresh(test_case)
     return test_case
+=======
+>>>>>>> 8fd65ac (Backend subprocess handler)
