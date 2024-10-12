@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { Button } from "@/components/ui/button";
-import axios from "axios"; // Import axios
+import axios from "axios";
 
 const Problem = () => {
   const editorRef = useRef<
