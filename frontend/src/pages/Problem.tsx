@@ -21,11 +21,43 @@ hello_world()
     console.log("Editor is mounted and available:", editor);
   };
 
-  // Function to print the code from the editor to the console
-  const printCode = () => {
+  // Function to execute the code by sending it to the FastAPI backend
+  const executeCode = async () => {
     if (editorRef.current) {
       const currentCode = editorRef.current.getValue();
-      console.log("Current code in editor:", currentCode);
+
+      try {
+        // Send a POST request to the FastAPI backend
+        const response = await fetch("http://localhost:8000/execute/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ code: currentCode }),
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to execute the code.");
+        }
+
+        const result = await response.json();
+        console.log("Execution result:", result);
+
+        // Log both stdout and stderr to the console
+        if (result.stdout && result.stdout.length > 0) {
+          result.stdout.forEach((output: any) => {
+            console.log(`[${output.timestamp}] ${output.output}`);
+          });
+        }
+
+        if (result.stderr && result.stderr.length > 0) {
+          result.stderr.forEach((error: any) => {
+            console.error(`[${error.timestamp}] ${error.error}`);
+          });
+        }
+      } catch (error) {
+        console.error("Error during code execution:", error);
+      }
     } else {
       console.error("Editor is not available");
     }
@@ -51,7 +83,7 @@ hello_world()
         }}
       />
       <div className="flex justify-center mt-4">
-        <Button onClick={printCode}>Print Code to Console</Button>{" "}
+        <Button onClick={executeCode}>Execute Code</Button>{" "}
       </div>
     </div>
   );
