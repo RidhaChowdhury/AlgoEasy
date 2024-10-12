@@ -1,10 +1,16 @@
-import { Button } from "@/components/ui/button";
-import Problem from "@/pages/Problem"
+import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+import ProblemSelection from "@/pages/ProblemSelection";
+import Problem from "@/pages/Problem";
 
-export default function App() {
+function App() {
   return (
-    <div>
-      <Problem></Problem>
-    </div>
+    <Router>
+      <Routes>
+        <Route path="/" element={<ProblemSelection />} />
+        <Route path="/problem/:id" element={<Problem />} />
+      </Routes>
+    </Router>
   );
 }
+
+export default App;
