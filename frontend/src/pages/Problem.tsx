@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { Button } from "@/components/ui/button";
+import axios from "axios"; // Import axios
 
 const Problem = () => {
   const editorRef = useRef<
@@ -21,26 +22,17 @@ hello_world()
     console.log("Editor is mounted and available:", editor);
   };
 
-  // Function to execute the code by sending it to the FastAPI backend
+  // Function to execute the code by sending it to the FastAPI backend using axios
   const executeCode = async () => {
     if (editorRef.current) {
       const currentCode = editorRef.current.getValue();
 
       try {
-        // Send a POST request to the FastAPI backend
-        const response = await fetch("http://localhost:8000/execute/", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ code: currentCode }),
+        const response = await axios.post("http://localhost:8000/execute/", {
+          code: currentCode,
         });
 
-        if (!response.ok) {
-          throw new Error("Failed to execute the code.");
-        }
-
-        const result = await response.json();
+        const result = response.data;
         console.log("Execution result:", result);
 
         // Log both stdout and stderr to the console
