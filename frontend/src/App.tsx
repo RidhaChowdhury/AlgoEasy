@@ -1,9 +1,10 @@
 import { Button } from "@/components/ui/button";
+import Problem from "@/pages/Problem"
 
 export default function App() {
   return (
     <div>
-      <Button variant="ghost">Click me</Button>
+      <Problem></Problem>
     </div>
   );
 }
