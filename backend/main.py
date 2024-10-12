@@ -129,10 +129,20 @@ def execute_code(request: CodeExecutionRequest):
             "test_cases": [],
         }
 
-        # Handle stdout (test results)
+        # Handle stdout (combined test results and print output)
         if stdout:
-            test_results = json.loads(stdout.strip())
-            result["test_cases"] = test_results
+            try:
+                # Parse the JSON output from code_runner.py
+                parsed_output = json.loads(stdout.strip())
+
+                # Populate test cases and print output separately
+                result["stdout"] = parsed_output.get("stdout", [])
+                result["test_cases"] = parsed_output.get("test_cases", [])
+            except json.JSONDecodeError:
+                result["stderr"].append({
+                    "timestamp": time.strftime("%H:%M:%S", time.localtime()),
+                    "error": "Failed to parse JSON from code_runner.py"
+                })
 
         # Handle stderr (errors during execution)
         if stderr:
@@ -142,7 +152,7 @@ def execute_code(request: CodeExecutionRequest):
                     "error": line
                 })
 
->>>>>>> 8fd65ac (Backend subprocess handler)
+        print(result)
         return result
 
     except Exception as e:
