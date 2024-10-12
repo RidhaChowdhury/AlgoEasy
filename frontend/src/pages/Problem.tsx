@@ -1,28 +1,7 @@
 import { useLocation } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import axios from "axios"; // Import axios
 import axios from "axios";
-import { PlayCircle } from "lucide-react";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import CodeMirror from "@uiw/react-codemirror";
-import { python } from "@codemirror/lang-python";
-import { sublime } from "@uiw/codemirror-themes-all";
-
-// Define the Problem type
-type Problem = {
-  id: number;
-  title: string;
-  description: string;
-  arguments: string; // Arguments for the solution function
-};
 
 const Problem = () => {
   const editorRef = useRef<
