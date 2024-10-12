@@ -8,21 +8,25 @@ const Problem = () => {
     import("monaco-editor").editor.IStandaloneCodeEditor | null
   >(null);
   const [code, setCode] = useState(`# This is Python code
-def hello_world():
-    print("Hello, world!")
-    
-hello_world()
+def solution(n):
+    if n % 3 == 0 and n % 5 == 0:
+        return "FizzBuzz"
+    elif n % 3 == 0:
+        return "Fizz"
+    elif n % 5 == 0:
+        return "Buzz"
+    else:
+        return str(n)
 `);
 
-  // Function to handle when the editor is mounted
+  const [testResults, setTestResults] = useState<any[]>([]);
+
   const handleEditorDidMount = (
     editor: import("monaco-editor").editor.IStandaloneCodeEditor
   ) => {
     editorRef.current = editor;
-    console.log("Editor is mounted and available:", editor);
   };
 
-  // Function to execute the code by sending it to the FastAPI backend using axios
   const executeCode = async () => {
   // Function to print the code from the editor to the console
   const printCode = () => {
@@ -37,13 +41,18 @@ hello_world()
         const result = response.data;
         console.log("Execution result:", result);
 
-        // Log both stdout and stderr to the console
+        if (result.test_cases) {
+          setTestResults(result.test_cases);
+        }
+
+        // Log stdout
         if (result.stdout && result.stdout.length > 0) {
           result.stdout.forEach((output: any) => {
             console.log(`[${output.timestamp}] ${output.output}`);
           });
         }
 
+        // Log stderr
         if (result.stderr && result.stderr.length > 0) {
           result.stderr.forEach((error: any) => {
             console.error(`[${error.timestamp}] ${error.error}`);
@@ -79,6 +88,27 @@ hello_world()
       />
       <div className="flex justify-center mt-4">
         <Button onClick={printCode}>Print Code to Console</Button>{" "}
+      </div>
+      <div className="mt-8 px-8">
+        <h2 className="text-lg font-semibold">Test Case Results:</h2>
+        <ul>
+          {testResults.map((result, index) => (
+            <li key={index} className="my-2">
+              <div>
+                <strong>Inputs:</strong> {JSON.stringify(result.inputs)}
+              </div>
+              <div>
+                <strong>Expected:</strong> {result.expected}
+              </div>
+              <div>
+                <strong>Result:</strong> {result.result}
+              </div>
+              <div>
+                <strong>Passed:</strong> {result.passed ? "✅" : "❌"}
+              </div>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
