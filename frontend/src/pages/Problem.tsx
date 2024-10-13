@@ -2,18 +2,17 @@ import { useLocation } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
-import { PlayCircle } from "lucide-react";
+import { PlayCircle, ReceiptText, CircleSlash } from "lucide-react"; // Importing icons
 import {
   ResizableHandle,
   ResizablePanel,
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { sublime } from "@uiw/codemirror-themes-all";
+import { Separator } from "@/components/ui/separator";
 
 // Define the Problem type
 type Problem = {
@@ -23,40 +22,40 @@ type Problem = {
   arguments: string; // Arguments for the solution function
 };
 
+// Define the structure for test case data
+type TestCase = {
+  inputs: string[];
+  expected_output: string;
+};
+
 const Problem = () => {
   const editorRef = useRef<any>(null);
 
   const location = useLocation();
   const { problem } = location.state || {}; // Get the problem data from location state
 
-  // Dynamically generate the initial code using the problem's arguments
-  const generateInitialCode = (args: string) =>
-    `def solution(${args}):\n    pass\n`;
-
   const [code, setCode] = useState(
-    problem
-      ? generateInitialCode(problem.arguments)
-      : "def solution():\n    pass\n"
+    problem ? `def solution(${problem.arguments}):\n    pass\n` : ""
   );
-  const [testResults, setTestResults] = useState<any[]>([]);
-  const [consoleOutput, setConsoleOutput] = useState<any[]>([]);
+  const [testCases, setTestCases] = useState<TestCase[]>([]);
+  const [selectedTestCaseIndex, setSelectedTestCaseIndex] = useState<number>(0);
   const [loadingTestCases, setLoadingTestCases] = useState<boolean>(true);
+  const [executionResults, setExecutionResults] = useState<any[]>([]);
 
   useEffect(() => {
     if (problem) {
-      setCode(generateInitialCode(problem.arguments)); // Reset code to initial code when problem changes
-
-      // Fetch the test cases for the selected problem
+      setCode(`def solution(${problem.arguments}):\n    pass\n`);
       fetchTestCases(problem.id);
     }
   }, [problem]);
 
+  // Fetch test cases for the selected problem
   const fetchTestCases = async (problemId: number) => {
     try {
       const response = await axios.get(
         `http://localhost:8000/problems/${problemId}/test_cases`
       );
-      setTestResults(response.data); // Store the test cases for later use
+      setTestCases(response.data);
       setLoadingTestCases(false);
     } catch (error) {
       console.error("Error fetching test cases:", error);
@@ -69,37 +68,47 @@ const Problem = () => {
       try {
         const response = await axios.post("http://localhost:8000/execute/", {
           code: code,
-          problem_id: problem.id, // Pass the problem ID
+          problem_id: problem.id,
         });
-
         const result = response.data;
 
-        // Handle test cases
+        // Handle test cases and console output from the execution
         if (result.test_cases) {
-          setTestResults(result.test_cases);
+          setExecutionResults(result.test_cases);
         }
-
-        // Handle console output
-        const consoleLogs: any[] = [];
-        if (result.stdout && result.stdout.length > 0) {
-          result.stdout.forEach(([timestamp, output]: [string, string]) => {
-            consoleLogs.push(`[${timestamp}] ${output}`);
-          });
-        }
-
-        if (result.stderr && result.stderr.length > 0) {
-          result.stderr.forEach((error: any) => {
-            consoleLogs.push(`[${error.timestamp}] ${error.error}`);
-          });
-        }
-
-        setConsoleOutput(consoleLogs);
       } catch (error) {
         console.error("Error during code execution:", error);
       }
-    } else {
-      console.error("Test cases are still loading");
     }
+  };
+
+  // Get console output (stdout and stderr) for the selected test case
+  const getConsoleOutputForTestCase = (testCaseIndex: number) => {
+    const selectedResult = executionResults[testCaseIndex];
+    if (!selectedResult) {
+      return ["No output."];
+    }
+    return [
+      ...selectedResult.stdout.map((line: any) =>
+        typeof line === "string"
+          ? { type: "log", message: line }
+          : { type: "error", message: "Invalid output" }
+      ),
+      ...selectedResult.stderr.map((line: any) =>
+        typeof line === "string"
+          ? { type: "error", message: line }
+          : { type: "error", message: "Invalid error output" }
+      ),
+    ];
+  };
+
+  // Get button background color based on test case result
+  const getTestCaseButtonColor = (index: number) => {
+    if (!executionResults.length) return "bg-gray-700"; // Not run yet
+    const result = executionResults[index]?.test_result?.passed;
+    if (result === true) return "bg-green-600";
+    if (result === false) return "bg-red-600";
+    return "bg-gray-700"; // Not run yet
   };
 
   return (
@@ -108,7 +117,7 @@ const Problem = () => {
         {/* Left Panel: Problem Description */}
         <ResizablePanel
           defaultSize={25}
-          className="bg-[#303940] text-[#d4d4d4] h-full"
+          className="bg-[#303940] text-[#d4d4d4]"
         >
           <div className="h-full p-4">
             <h2 className="text-xl font-semibold mb-4">
@@ -118,31 +127,30 @@ const Problem = () => {
           </div>
         </ResizablePanel>
         <ResizableHandle />
+
         {/* Right Panel: Editor and Test Results */}
         <ResizablePanel
           defaultSize={75}
-          className="bg-[#303940] text-[#d4d4d4] h-full flex flex-col"
+          className="bg-[#303940] text-[#d4d4d4]"
         >
-          <ResizablePanelGroup direction="vertical" className="flex-1">
-            {/* Top Right: Editor with header */}
+          <ResizablePanelGroup direction="vertical" className="h-full">
+            {/* Top Right: Editor with Play button */}
             <ResizablePanel
               defaultSize={60}
-              className="bg-[#303940] flex flex-col relative" // Add relative positioning
+              className="bg-[#303940] flex flex-col relative"
             >
               <div className="flex flex-col h-full">
                 {/* CodeMirror Editor */}
-                <CodeMirror
-                  value={code}
-                  height="100%"
-                  extensions={[python()]}
-                  theme={sublime}
-                  onChange={(value: string) => setCode(value)}
-                  style={{ overflowY: "auto", height: "100%" }}
-                  basicSetup={{
-                    lineNumbers: true,
-                    autocompletion: true,
-                  }}
-                />
+                <div className="flex-1 overflow-hidden">
+                  <CodeMirror
+                    value={code}
+                    height="100%"
+                    extensions={[python()]}
+                    theme={sublime}
+                    onChange={(value: string) => setCode(value)}
+                    className="h-full"
+                  />
+                </div>
                 {/* Play Button Overlay */}
                 <div className="absolute top-2 right-4 z-10">
                   <Button onClick={executeCode} className="bg-[#007acc] p-2">
@@ -152,79 +160,106 @@ const Problem = () => {
               </div>
             </ResizablePanel>
             <ResizableHandle />
-            {/* Bottom Bar: Tabs with Test Case Results and Console Output */}
-            <ResizablePanel
-              defaultSize={40}
-              className="bg-[#303940] text-[#d4d4d4] flex-grow"
-            >
-              <Tabs defaultValue="testCases" className="h-full">
-                <TabsList className="m-2 bg-[#3c474f] rounded-lg">
-                  <TabsTrigger
-                    value="testCases"
-                    className="px-4 py-2 rounded-md text-gray-300 transition-all duration-200 ease-in-out
-      data-[state=active]:bg-[#1E252A] data-[state=active]:text-white
-      data-[state=inactive]:bg-transparent data-[state=inactive]:text-gray-400"
-                  >
-                    Test Cases
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="console"
-                    className="px-4 py-2 rounded-md text-gray-300 transition-all duration-200 ease-in-out
-      data-[state=active]:bg-[#1E252A] data-[state=active]:text-white
-      data-[state=inactive]:bg-transparent data-[state=inactive]:text-gray-400"
-                  >
-                    Console Output
-                  </TabsTrigger>
-                </TabsList>
-                {/* Test Case Results Tab */}
-                <TabsContent value="testCases" className="h-full flex-grow">
-                  <ScrollArea className="h-full w-full overflow-y-auto ml-2">
-                    <div className="pb-14">
-                      {testResults.length > 0 ? (
-                        testResults.map((result, index) => (
-                          <div key={index} className="mb-2">
-                            <div>
-                              <strong>Inputs:</strong>{" "}
-                              {JSON.stringify(result.inputs)}
-                            </div>
-                            <div>
-                              <strong>Expected:</strong> {result.expected}
-                            </div>
-                            <div>
-                              <strong>Result:</strong> {result.result}
-                            </div>
-                            <div>
-                              <strong>Passed:</strong>{" "}
-                              {result.passed ? "✅" : "❌"}
-                            </div>
-                            {index < testResults.length - 1 && (
-                              <Separator className="my-2 bg-[#333333]" />
-                            )}
-                          </div>
-                        ))
-                      ) : (
-                        <p>No test cases available.</p>
-                      )}
+
+            {/* Bottom Section with 3 Resizable Panels */}
+            <ResizablePanel defaultSize={40} className="bg-[#1E252A]">
+              <ResizablePanelGroup direction="horizontal" className="h-full">
+                {/* Left Panel: Test Case Selection */}
+                <ResizablePanel defaultSize={10} maxSize={10} minSize={10} className="h-full">
+                  <ScrollArea className="h-full">
+                    <div className="p-2 text-center">
+                      <h3 className="text-lg font-semibold">Cases</h3>
+                      <ul>
+                        {testCases.map((testCase, index) => (
+                          <li key={index}>
+                            <button
+                              className={`block w-full text-center p-2 mb-2 ${getTestCaseButtonColor(
+                                index
+                              )}`}
+                              onClick={() => setSelectedTestCaseIndex(index)}
+                            >
+                              #{index + 1}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   </ScrollArea>
-                </TabsContent>
-                {/* Console Output Tab */}
-                <TabsContent value="console" className="h-full flex-grow">
-                  <ScrollArea className="h-full w-full overflow-y-auto m-2">
-                    <div className="pb-14">
-                      {consoleOutput.length > 0 ? (
-                        consoleOutput.map((line, index) => (
-                          <div key={index} className="mb-2">
-                            {line}
-                          </div>
-                        ))
+                </ResizablePanel>
+                <ResizableHandle />
+
+                {/* Middle Panel: Test Case Details */}
+                <ResizablePanel defaultSize={40} className="h-full">
+                  <div className="p-4">
+                    <h3 className="text-lg font-semibold">Test Case Details</h3>
+                    {testCases[selectedTestCaseIndex] && (
+                      <div>
+                        <strong>Inputs:</strong>{" "}
+                        {JSON.stringify(
+                          testCases[selectedTestCaseIndex].inputs
+                        )}
+                        <br />
+                        <strong>Expected Output:</strong>{" "}
+                        {testCases[selectedTestCaseIndex].expected_output}
+                        <br />
+                        {executionResults.length > 0 && (
+                          <>
+                            <strong>Actual Output:</strong>{" "}
+                            {
+                              executionResults[selectedTestCaseIndex]
+                                ?.test_result?.result
+                            }
+                            <br />
+                            <strong>Passed:</strong>{" "}
+                            {executionResults[selectedTestCaseIndex]
+                              ?.test_result?.passed
+                              ? "✅"
+                              : "❌"}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </ResizablePanel>
+                <ResizableHandle />
+
+                {/* Right Panel: Console Output */}
+                <ResizablePanel defaultSize={40} className="h-full">
+                  <ScrollArea className="h-full p-4">
+                    <h3 className="text-lg font-semibold">Console Output</h3>
+                    <div className="text-sm">
+                      {executionResults.length > 0 ? (
+                        getConsoleOutputForTestCase(selectedTestCaseIndex).map(
+                          (log, index) => (
+                            <>
+                              <div
+                                key={index}
+                                className="flex items-center space-x-2"
+                                >
+                                {log.type === "error" ? (
+                                  <CircleSlash className="text-red-500" />
+                                ) : (
+                                  <ReceiptText className="text-white" />
+                                )}
+                                <span
+                                  className={
+                                    log.type === "error" ? "text-red-500" : ""
+                                  }
+                                  >
+                                  {log.message}
+                                </span>
+                              </div>
+                              <Separator className="m-2"/>
+                            </>
+                          )
+                        )
                       ) : (
                         <p>No output.</p>
                       )}
                     </div>
                   </ScrollArea>
-                </TabsContent>
-              </Tabs>
+                </ResizablePanel>
+              </ResizablePanelGroup>
             </ResizablePanel>
           </ResizablePanelGroup>
         </ResizablePanel>

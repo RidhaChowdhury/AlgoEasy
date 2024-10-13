@@ -8,6 +8,8 @@ import json
 from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
+# from langchain.llms.llamacpp import LlamaCpp
+# from langchain.prompts import PromptTemplate
 
 # Set up the database connection
 DATABASE_URL = "postgresql://postgres:yourpassword@localhost:5432/problems_db"
@@ -52,7 +54,7 @@ app.add_middleware(
 # Define the Pydantic model for code execution requests
 class CodeExecutionRequest(BaseModel):
     code: str
-    problem_id: int  # Include the problem ID with the code
+    problem_id: int
 
 # Fetch all problems
 @app.get("/problems")
@@ -81,7 +83,7 @@ def get_problem(problem_id: int):
         ]
     }
 
-# Fetch all test cases associated with a specific problem
+# Fetch all test cases for a specific problem
 @app.get("/problems/{problem_id}/test_cases")
 def get_test_cases_for_problem(problem_id: int):
     db = SessionLocal()
@@ -99,7 +101,7 @@ def get_test_cases_for_problem(problem_id: int):
 def execute_code(request: CodeExecutionRequest):
     db = SessionLocal()
     
-    # Fetch test cases for the given problem_id
+    # Fetch the problem and test cases from the database
     problem = db.query(Problem).filter(Problem.id == request.problem_id).first()
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found")
@@ -110,7 +112,6 @@ def execute_code(request: CodeExecutionRequest):
 
     # Save the user's code to a temporary file
     temp_code_file = "user_code.py"
-    
     with open(temp_code_file, "w") as f:
         f.write(request.code)
         f.write("\n")
@@ -128,6 +129,7 @@ def execute_code(request: CodeExecutionRequest):
 
     # Run the subprocess to execute the test cases via code_runner.py
     try:
+        # Run the code_runner.py script and capture the output
         process = subprocess.Popen(
             ["python", "code_runner.py", temp_test_case_file],
             stdout=subprocess.PIPE,
@@ -137,34 +139,24 @@ def execute_code(request: CodeExecutionRequest):
 
         stdout, stderr = process.communicate()
 
-        result = {
-            "stdout": [],
-            "stderr": [],
-            "test_cases": [],
-        }
+        # Default result structure
+        result = {"test_cases": []}
 
-        # Handle stdout (combined test results and print output)
+        # Parse stdout from code_runner.py (contains test case results)
         if stdout:
             try:
-                # Parse the JSON output from code_runner.py
                 parsed_output = json.loads(stdout.strip())
-
-                # Populate test cases and print output separately
-                result["stdout"] = parsed_output.get("stdout", [])
                 result["test_cases"] = parsed_output.get("test_cases", [])
             except json.JSONDecodeError:
-                result["stderr"].append({
-                    "timestamp": time.strftime("%H:%M:%S", time.localtime()),
-                    "error": "Failed to parse JSON from code_runner.py"
+                result["test_cases"].append({
+                    "stderr": ["Failed to parse JSON from code_runner.py"]
                 })
 
-        # Handle stderr (errors during execution)
+        # If there's stderr outside of individual test cases, append it to the last test case or add a separate entry
         if stderr:
-            for line in stderr.splitlines():
-                result["stderr"].append({
-                    "timestamp": time.strftime("%H:%M:%S", time.localtime()),
-                    "error": line
-                })
+            result["test_cases"].append({
+                "stderr": stderr.strip().splitlines()
+            })
 
         print(result)
         return result
@@ -173,46 +165,60 @@ def execute_code(request: CodeExecutionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     finally:
-        # Clean up the temporary user code file and test case file
+        # Clean up the temporary files
         if os.path.exists(temp_code_file):
             os.remove(temp_code_file)
         if os.path.exists(temp_test_case_file):
             os.remove(temp_test_case_file)
-
-# Add route to create a new problem
-class ProblemRequest(BaseModel):
-    title: str
-    description: str
-    arguments: str
-
-@app.post("/problems")
-def create_problem(problem_request: ProblemRequest):
+            
+# Add route to generate a hint using LangChain and CodeLlama
+@app.post("/generate_hint/")
+def generate_hint(request: CodeExecutionRequest):
     db = SessionLocal()
-    problem = Problem(
-        title=problem_request.title,
-        description=problem_request.description,
-        arguments=problem_request.arguments
-    )
-    db.add(problem)
-    db.commit()
-    db.refresh(problem)
-    return problem
+    
+    # Fetch the problem description from the database
+    problem = db.query(Problem).filter(Problem.id == request.problem_id).first()
+    if not problem:
+        raise HTTPException(status_code=404, detail="Problem not found")
 
-# Add route to create a test case for a specific problem
-class TestCaseRequest(BaseModel):
-    problem_id: int
-    inputs: str  # JSON-encoded inputs
-    expected_output: str
+    # Execute the code to get output
+    execute_response = execute_code(request)
 
-@app.post("/test_cases")
-def create_test_case(test_case_request: TestCaseRequest):
-    db = SessionLocal()
-    test_case = TestCase(
-        problem_id=test_case_request.problem_id,
-        inputs=test_case_request.inputs,
-        expected_output=test_case_request.expected_output
-    )
-    db.add(test_case)
-    db.commit()
-    db.refresh(test_case)
-    return test_case
+    print(execute_response)
+    
+    # Combine the problem description, code, and execute output
+    problem_description = problem.description
+    code_output = execute_response['stdout'] + execute_response['stderr']
+    user_code = request.code
+
+    # Initialize the LLM with CodeLlama or an alternative
+    # llm = LlamaCpp(
+    #     model_path="/Users/rlm/Desktop/Code/llama.cpp/models/openorca-platypus2-13b.gguf.q4_0.bin",
+    #     f16_kv=True,  # MUST set to True, otherwise you will run into problem after a couple of calls
+    #     verbose=True,
+    # )
+
+    
+    # Define a prompt to generate the hint
+    prompt = f"""
+    You are helping a student with the following problem:
+
+    Problem Description: {problem_description}
+
+    Their Code:
+    {user_code}
+
+    The output from running the code:
+    {code_output}
+
+    Based on the problem description, their code, and the output, provide a helpful hint on what might be wrong with their implementation and how they can improve it.
+    """
+
+    print(prompt)
+
+    # Use LangChain to generate the hint
+    # prompt_template = PromptTemplate.from_template(prompt)
+    # hint = llm(prompt_template)
+
+    # return {"hint": hint}
+
