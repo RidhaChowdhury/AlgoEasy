@@ -8,6 +8,8 @@ import {
   ReceiptText,
   CircleSlash,
   BotMessageSquare,
+  Brain,
+  BrainCog
 } from "lucide-react";
 import {
   ResizableHandle,
@@ -48,6 +50,7 @@ const Problem = () => {
   const [executionResults, setExecutionResults] = useState<any[]>([]);
   const [aiResponses, setAiResponses] = useState<string[]>([]);
   const [isLoadingHint, setIsLoadingHint] = useState<boolean>(false);
+  const [wasSeen, setWasSeen] = useState<boolean>(false);
 
   useEffect(() => {
     if (problem) {
@@ -88,10 +91,37 @@ const Problem = () => {
 
   const getHint = async () => {
     setIsLoadingHint(true);
+    setWasSeen(false); // Reset wasSeen to false initially
     setAiResponses([]); // Reset the previous AI responses
     let completeResponse = ""; // To accumulate the full message
 
+    // Call find_similar first
     try {
+      const similarityRes = await fetch("http://localhost:8000/find_similar/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          code: code,
+          problem_id: problem.id,
+        }),
+      });
+
+      if (!similarityRes.ok) {
+        console.error("Error calling find_similar:", similarityRes.statusText);
+        throw new Error("Error calling find_similar");
+      }
+
+      const similarityData = await similarityRes.json();
+      const similarityScore = similarityData.similarity_score;
+
+      // If the similarity score is less than 0.1, set wasSeen to true
+      if (similarityScore < 0.1) {
+        setWasSeen(true);
+      }
+
+      // Proceed to call generate_hint if needed
       await fetchEventSource("http://localhost:8000/generate_hint/", {
         method: "POST",
         headers: {
@@ -193,8 +223,9 @@ const Problem = () => {
             {/* AI Hint Panel */}
             <ResizablePanel defaultSize={50}>
               <div className="h-full p-4 flex flex-col">
-                <div>
+                <div className="flex flex-row w-full justify-between">
                   <h3 className="text-lg font-semibold mb-2">AI Hint</h3>
+                  {!wasSeen ? <Brain/> : <BrainCog className="text-yellow-400"/>}
                 </div>
                 <ScrollArea className="flex-grow mb-4">
                   {aiResponses.map((response, index) => (

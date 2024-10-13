@@ -13,7 +13,6 @@ import faiss
 import numpy as np
 from transformers import AutoModel, AutoTokenizer
 import torch
-# Add route to generate a hint using the pre-loaded Llama model
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 import asyncio
@@ -55,12 +54,6 @@ class CodeExecutionRequest(BaseModel):
     code: str
     problem_id: int
 
-from fastapi import FastAPI
-from contextlib import asynccontextmanager
-import faiss
-import os
-import json
-from transformers import AutoTokenizer, AutoModel
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -72,6 +65,15 @@ async def lifespan(app: FastAPI):
     # Dictionary of FAISS indices (one per problem_id)
     app.faiss_indices = {}
     app.embeddings_data = {}
+
+    app.code_llm = Llama(
+        model_path="C:/Users/chowd/ProgrammingProjects/AlgoEasy/backend/Code-Llama-3-8B-Q8_0.gguf",
+        f16_kv=True,
+        verbose=True,
+        chat_format="chatml",
+        n_ctx=768,
+        n_gpu_layers=10,
+    )
 
     # Load or initialize FAISS indices and embeddings data for each problem
     for problem_id in range(1, 3):  # Adjust according to the range of your problem IDs
@@ -96,6 +98,8 @@ async def lifespan(app: FastAPI):
         faiss.write_index(faiss_index, f"faiss_index_{problem_id}.idx")
         with open(f"embeddings_data_{problem_id}.json", 'w') as f:
             json.dump(app.embeddings_data[problem_id], f)
+
+    del app.code_llm
 
 # Set up FastAPI with lifespan
 app = FastAPI(lifespan=lifespan)
@@ -154,8 +158,6 @@ def get_test_cases_for_problem(problem_id: int):
 # Add route to execute code
 @app.post("/execute/")
 def execute_code(request: CodeExecutionRequest):
-    import pyperclip
-    pyperclip.copy(request.code.replace('\n', '\\n').replace('"', "'"))
     db = SessionLocal()
     
     # Fetch the problem and test cases from the database
@@ -263,20 +265,11 @@ def stream_response(request):
             """
         }
     ]
-
-    code_llm = Llama(
-        model_path="C:/Users/chowd/ProgrammingProjects/AlgoEasy/backend/Code-Llama-3-8B-Q8_0.gguf",
-        f16_kv=True,
-        verbose=True,
-        chat_format="chatml",
-        n_ctx=768,
-        n_gpu_layers=10,
-    )
-
+    
     explanation = ""
 
     # Stream explanation from the LLM
-    for stream_response in code_llm.create_chat_completion(explanation_messages, temperature=0.1, stream=True):
+    for stream_response in app.code_llm.create_chat_completion(explanation_messages, temperature=0.1, stream=True):
         if 'content' in stream_response["choices"][0]["delta"]:
             explanation_part = stream_response["choices"][0]["delta"]['content']
             explanation += explanation_part
@@ -374,13 +367,13 @@ def stream_response(request):
     ]
 
     # Stream hint generation from the LLM
-    for stream_response in code_llm.create_chat_completion(hint_messages, stream=True):
+    for stream_response in app.code_llm.create_chat_completion(hint_messages, stream=True):
         if 'content' in stream_response["choices"][0]["delta"]:
             hint = stream_response["choices"][0]["delta"]['content']
             print(hint, end="", flush=True)
             yield "data: " + hint + "\n\n"
 
-    del code_llm
+    del app.code_llm
 
 @app.post("/generate_hint/")
 async def generate_hint(request: CodeExecutionRequest):
