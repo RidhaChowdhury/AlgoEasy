@@ -2,7 +2,7 @@ import { useLocation } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
-import { PlayCircle, ReceiptText, CircleSlash } from "lucide-react"; // Importing icons
+import { PlayCircle, ReceiptText, CircleSlash, BotMessageSquare } from "lucide-react"; // Importing icons
 import {
   ResizableHandle,
   ResizablePanel,
@@ -82,6 +82,30 @@ const Problem = () => {
     }
   };
 
+    const getHint = async () => {
+      if (!loadingTestCases) {
+        try {
+          const response = await axios.post(
+            "http://localhost:8000/generate_hint/",
+            {
+              code: code,
+              problem_id: problem.id,
+            },
+            {
+              headers: {
+                "Content-Type": "application/json",
+              },
+            }
+          );
+          const result = response.data;
+
+          console.log(result);
+        } catch (error) {
+          console.error("Error during code execution:", error);
+        }
+      }
+    };
+
   // Get console output (stdout and stderr) for the selected test case
   const getConsoleOutputForTestCase = (testCaseIndex: number) => {
     const selectedResult = executionResults[testCaseIndex];
@@ -152,7 +176,11 @@ const Problem = () => {
                   />
                 </div>
                 {/* Play Button Overlay */}
-                <div className="absolute top-2 right-4 z-10">
+                <div className="absolute top-2 right-4 z-10 flex flex-row gap-2">
+                  <Button onClick={getHint} className="bg-[#547c97] p-2">
+                    <BotMessageSquare className="w-6 h-6 text-white" />
+                  </Button>
+
                   <Button onClick={executeCode} className="bg-[#007acc] p-2">
                     <PlayCircle className="w-6 h-6 text-white" />
                   </Button>
@@ -165,7 +193,12 @@ const Problem = () => {
             <ResizablePanel defaultSize={40} className="bg-[#1E252A]">
               <ResizablePanelGroup direction="horizontal" className="h-full">
                 {/* Left Panel: Test Case Selection */}
-                <ResizablePanel defaultSize={10} maxSize={10} minSize={10} className="h-full">
+                <ResizablePanel
+                  defaultSize={10}
+                  maxSize={10}
+                  minSize={10}
+                  className="h-full"
+                >
                   <ScrollArea className="h-full">
                     <div className="p-2 text-center">
                       <h3 className="text-lg font-semibold">Cases</h3>
@@ -231,11 +264,8 @@ const Problem = () => {
                       {executionResults.length > 0 ? (
                         getConsoleOutputForTestCase(selectedTestCaseIndex).map(
                           (log, index) => (
-                            <>
-                              <div
-                                key={index}
-                                className="flex items-center space-x-2"
-                                >
+                            <div key={index}>
+                              <div className="flex items-center space-x-2">
                                 {log.type === "error" ? (
                                   <CircleSlash className="text-red-500" />
                                 ) : (
@@ -245,12 +275,13 @@ const Problem = () => {
                                   className={
                                     log.type === "error" ? "text-red-500" : ""
                                   }
-                                  >
+                                >
                                   {log.message}
                                 </span>
                               </div>
-                              <Separator className="m-2"/>
-                            </>
+                              {/* Separator for each console log or error */}
+                              <Separator className="my-2 opacity-50" />
+                            </div>
                           )
                         )
                       ) : (

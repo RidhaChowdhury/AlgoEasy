@@ -1,18 +1,39 @@
 import json
 import sys
 import io
-import time
 import traceback
+import inspect
+from typing import get_type_hints
+
+
+def cast_inputs(solution, inputs):
+    """Cast inputs based on the type hints from the solution function."""
+    signature = inspect.signature(solution)
+    parameters = signature.parameters
+
+    casted_inputs = []
+    for i, (name, param) in enumerate(parameters.items()):
+        hint = param.annotation  # Get the type hint
+        if hint != inspect._empty:  # If a type hint is provided
+            casted_inputs.append(hint(inputs[i]))  # Cast input to the hinted type
+        else:
+            casted_inputs.append(inputs[i])  # No hint, use the input as-is
+
+    return casted_inputs
+
 
 def run_tests(solution):
     test_cases = generate_test_cases()
     results = []
-    
+
     for inputs, expected in test_cases:
+        # Cast inputs based on type hints in the solution function
+        casted_inputs = cast_inputs(solution, inputs)
+
         # Reset stdout and stderr for each test case
         new_stdout = io.StringIO()
         new_stderr = io.StringIO()
-        
+
         old_stdout = sys.stdout
         old_stderr = sys.stderr
         sys.stdout = new_stdout
@@ -20,9 +41,10 @@ def run_tests(solution):
         expected_str = str(expected)
 
         try:
-            result = solution(*inputs)
+            # Execute the user's solution with the casted inputs
+            result = solution(*casted_inputs)
 
-            # Cast result and expected to strings
+            # Convert the result to a string for comparison
             result_str = str(result)
 
             # Test case results with stdout/stderr for each test case
@@ -54,14 +76,16 @@ def run_tests(solution):
             # Restore the original stdout and stderr
             sys.stdout = old_stdout
             sys.stderr = old_stderr
-    
+
     return results
+
 
 def generate_test_cases():
     # Load the test cases from the JSON file
     with open("test_cases.json", "r") as f:
         test_cases = json.load(f)
     return test_cases
+
 
 if __name__ == "__main__":
     import user_code  # Directly import the user's code
