@@ -106,6 +106,31 @@ const Problem = () => {
       }
     };
 
+    const getSimilarity = async () => {
+      if (!loadingTestCases) {
+        try {
+          const response = await axios.post(
+            "http://localhost:8000/find_similar/",
+            {
+              code: code,
+              problem_id: problem.id,
+            },
+            {
+              headers: {
+                "Content-Type": "application/json",
+              },
+            }
+          );
+          const result = response.data;
+
+          console.log(result);
+        } catch (error) {
+          console.error("Error during code execution:", error);
+        }
+      }
+    };
+
+
   // Get console output (stdout and stderr) for the selected test case
   const getConsoleOutputForTestCase = (testCaseIndex: number) => {
     const selectedResult = executionResults[testCaseIndex];
@@ -182,6 +207,10 @@ const Problem = () => {
                   </Button>
 
                   <Button onClick={executeCode} className="bg-[#007acc] p-2">
+                    <PlayCircle className="w-6 h-6 text-white" />
+                  </Button>
+
+                  <Button onClick={getSimilarity} className="bg-[#cc3d00] p-2">
                     <PlayCircle className="w-6 h-6 text-white" />
                   </Button>
                 </div>

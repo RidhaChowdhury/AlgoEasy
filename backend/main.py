@@ -57,29 +57,37 @@ from transformers import AutoTokenizer, AutoModel
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Attach the raw checkpoint directly, forcing everything to CPU
+    # Attach the raw checkpoint directly
     app.tokenizer = AutoTokenizer.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True)
-    app.model = AutoModel.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True).to("cpu")  # Force CPU
+    app.model = AutoModel.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True).to("cpu")
 
-    # FAISS index loading or initialization
-    if os.path.exists("faiss_index.idx"):
-        app.faiss_index = faiss.read_index("faiss_index.idx")
-    else:
-        app.faiss_index = faiss.IndexFlatL2(256)  # Set based on the embedding size (adjust as needed)
+    # Dictionary of FAISS indices (one per problem_id)
+    app.faiss_indices = {}
+    app.embeddings_data = {}
 
-    # Load embedding data
-    if os.path.exists("embeddings_data.json"):
-        with open("embeddings_data.json", 'r') as f:
-            app.embeddings_data = json.load(f)
-    else:
-        app.embeddings_data = []
+    # Load or initialize FAISS indices and embeddings data for each problem
+    for problem_id in range(1, 3):  # Adjust according to the range of your problem IDs
+        index_path = f"faiss_index_{problem_id}.idx"
+        data_path = f"embeddings_data_{problem_id}.json"
+        
+        if os.path.exists(index_path):
+            app.faiss_indices[problem_id] = faiss.read_index(index_path)
+        else:
+            app.faiss_indices[problem_id] = faiss.IndexFlatL2(256)  # Assume 256-dimensional embeddings
 
-    yield  # Start the application lifecycle here
+        if os.path.exists(data_path):
+            with open(data_path, 'r') as f:
+                app.embeddings_data[problem_id] = json.load(f)
+        else:
+            app.embeddings_data[problem_id] = []
 
-    # Save FAISS index and embedding data after the app finishes
-    faiss.write_index(app.faiss_index, "faiss_index.idx")
-    with open("embeddings_data.json", 'w') as f:
-        json.dump(app.embeddings_data, f)
+    yield
+
+    # Save FAISS indices and embedding data after the app finishes
+    for problem_id, faiss_index in app.faiss_indices.items():
+        faiss.write_index(faiss_index, f"faiss_index_{problem_id}.idx")
+        with open(f"embeddings_data_{problem_id}.json", 'w') as f:
+            json.dump(app.embeddings_data[problem_id], f)
 
 # Set up FastAPI with lifespan
 app = FastAPI(lifespan=lifespan)
@@ -390,27 +398,55 @@ class EmbeddingRequest(BaseModel):
 
 @app.post("/add_embedding/")
 async def add_embedding(request: EmbeddingRequest):
-    # Tokenize and encode the code snippet using app's tokenizer
-    inputs = app.tokenizer.encode(request.code, return_tensors="pt").cpu()  # Ensure it's on CPU
-    
-    # Generate embeddings on the CPU
+    inputs = app.tokenizer.encode(request.code, return_tensors="pt").cpu()
     with torch.no_grad():
         embedding = app.model(inputs)[0].cpu().numpy()
 
-    # Check the shape of the embedding and ensure it's 2D
     if len(embedding.shape) == 1:
-        embedding = embedding.reshape(1, -1)  # Reshape to (1, d) if it's a single embedding
+        embedding = embedding.reshape(1, -1)
 
-    # Add the embedding to FAISS (ensure embedding is in float32)
-    app.faiss_index.add(embedding.astype('float32'))
-    
-    # Store the problem ID and bug description in parallel with the embedding
-    app.embeddings_data.append({
+    # Add the embedding to the FAISS index for the specific problem
+    faiss_index = app.faiss_indices[request.problem_id]
+    faiss_index.add(embedding.astype('float32'))
+
+    # Store embedding details for the specific problem
+    app.embeddings_data[request.problem_id].append({
         "problem_id": request.problem_id,
         "bug_description": request.bug_description
     })
 
-    print(app.faiss_index.ntotal)
-    print(len(app.embeddings_data))
-
     return {"message": "Embedding added successfully"}
+
+class SimilarityRequest(BaseModel):
+    code: str
+    problem_id: int
+
+@app.post("/find_similar/")
+async def find_similar(request: SimilarityRequest):
+    inputs = app.tokenizer.encode(request.code, return_tensors="pt").cpu()
+    
+    with torch.no_grad():
+        embedding = app.model(inputs)[0].cpu().numpy()
+
+    if len(embedding.shape) == 1:
+        embedding = embedding.reshape(1, -1)
+
+    # Search the FAISS index corresponding to the problem ID
+    faiss_index = app.faiss_indices[request.problem_id]
+    D, I = faiss_index.search(embedding.astype('float32'), 1)
+
+    closest_index = I[0][0]
+    distance = float(D[0][0])  # Convert numpy.float32 to regular float
+
+    # Retrieve the corresponding bug description
+    bug_description = app.embeddings_data[request.problem_id][closest_index]["bug_description"]
+
+    data = {
+        "most_similar_problem_id": request.problem_id,
+        "bug_description": bug_description,
+        "similarity_score": distance  # Now a Python float
+    }
+
+    print(data)
+
+    return data
