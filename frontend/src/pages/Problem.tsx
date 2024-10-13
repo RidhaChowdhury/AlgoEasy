@@ -2,6 +2,7 @@ import { useLocation } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
+import { fetchEventSource } from "@microsoft/fetch-event-source";
 import {
   PlayCircle,
   ReceiptText,
@@ -86,53 +87,60 @@ const Problem = () => {
   };
 
   const getHint = async () => {
-    if (!loadingTestCases) {
-      setIsLoadingHint(true);
-      try {
-        const response = await axios.post(
-          "http://localhost:8000/generate_hint/",
-          {
-            code: code,
-            problem_id: problem.id,
-          },
-          {
-            responseType: "stream",
+    setIsLoadingHint(true);
+    setAiResponses([]); // Reset the previous AI responses
+    let completeResponse = ""; // To accumulate the full message
+
+    try {
+      await fetchEventSource("http://localhost:8000/generate_hint/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify({
+          code: code,
+          problem_id: problem.id,
+        }),
+        onopen: async (res) => {
+          if (res.ok && res.status === 200) {
+            console.log("Connection made ", res);
+          } else if (
+            res.status >= 400 &&
+            res.status < 500 &&
+            res.status !== 429
+          ) {
+            console.log("Client-side error ", res);
           }
-        );
-
-        const reader = response.data.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // Split the buffer by ¶¶¶ and update state
-          const parts = buffer.split("¶¶¶");
-          if (parts.length > 1) {
-            setAiResponses((prev) => [...prev, ...parts.slice(0, -1)]);
-            buffer = parts[parts.length - 1];
-          }
-        }
-
-        // Add any remaining content in the buffer
-        if (buffer.trim()) {
-          setAiResponses((prev) => [...prev, buffer.trim()]);
-        }
-      } catch (error) {
-        console.error("Error getting hint:", error);
-        setAiResponses((prev) => [
-          ...prev,
-          "Error fetching hint. Please try again.",
-        ]);
-      } finally {
-        setIsLoadingHint(false);
-      }
+        },
+        onmessage(event) {
+          const newResponse = event.data;
+          completeResponse += newResponse; // Concatenate all parts
+          setAiResponses([completeResponse]); // Set the concatenated string as a single response
+        },
+        onclose() {
+          console.log("Connection closed by the server");
+          setIsLoadingHint(false);
+        },
+        onerror(err) {
+          console.log("There was an error from server", err);
+          setIsLoadingHint(false);
+          setAiResponses((prev) => [
+            ...prev,
+            "Error fetching hint. Please try again.",
+          ]);
+        },
+      });
+    } catch (error) {
+      console.error("Error getting hint:", error);
+      setAiResponses((prev) => [
+        ...prev,
+        "Error fetching hint. Please try again.",
+      ]);
+      setIsLoadingHint(false);
     }
   };
+
 
   const getConsoleOutputForTestCase = (testCaseIndex: number) => {
     const selectedResult = executionResults[testCaseIndex];
@@ -185,7 +193,9 @@ const Problem = () => {
             {/* AI Hint Panel */}
             <ResizablePanel defaultSize={50}>
               <div className="h-full p-4 flex flex-col">
-                <h3 className="text-lg font-semibold mb-2">AI Hint</h3>
+                <div>
+                  <h3 className="text-lg font-semibold mb-2">AI Hint</h3>
+                </div>
                 <ScrollArea className="flex-grow mb-4">
                   {aiResponses.map((response, index) => (
                     <div key={index} className="mb-2">
@@ -195,7 +205,6 @@ const Problem = () => {
                       )}
                     </div>
                   ))}
-                  {isLoadingHint && <p>Loading hint...</p>}
                 </ScrollArea>
                 <div className="">
                   <Button

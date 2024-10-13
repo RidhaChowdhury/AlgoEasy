@@ -13,6 +13,10 @@ import faiss
 import numpy as np
 from transformers import AutoModel, AutoTokenizer
 import torch
+# Add route to generate a hint using the pre-loaded Llama model
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
+import asyncio
 
 # Set up the database connection
 DATABASE_URL = "postgresql://postgres:yourpassword@localhost:5432/problems_db"
@@ -60,6 +64,7 @@ from transformers import AutoTokenizer, AutoModel
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
     # Attach the raw checkpoint directly
     app.tokenizer = AutoTokenizer.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True)
     app.model = AutoModel.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True).to("cpu")
@@ -222,13 +227,8 @@ def execute_code(request: CodeExecutionRequest):
         if os.path.exists(temp_test_case_file):
             os.remove(temp_test_case_file)
 
-# Add route to generate a hint using the pre-loaded Llama model
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
-import asyncio
 
-@app.post("/generate_hint/")
-async def generate_hint(request: CodeExecutionRequest):
+def stream_response(request):
     db = SessionLocal()
     
     # Fetch the problem description from the database
@@ -259,7 +259,7 @@ async def generate_hint(request: CodeExecutionRequest):
             This is my code for {problem.title}, but it doesn't seem to work. Describe exactly what 
             the code is doing, without giving the correct solution. JUST EXPLAIN WHAT THE CODE IS DOING STEP BY STEP NOW
             {user_code}
-            IMPORTANT: DO NOT DO ANYTHING MORE THAN BREAKING DOWN THE USER'S CODE, DO NOT EXPLAIN THE PROBLEM AGAIN TO ME, DO NOT PROPOSE IMPROVEMENTS.
+            IMPORTANT: DO NOT DO ANYTHING MORE THAN BREAKING DOWN THE USER'S CODE. ONCE YOU HAVE DESCRIBED WHAT THE CODE DOES STOP!
             """
         }
     ]
@@ -269,118 +269,123 @@ async def generate_hint(request: CodeExecutionRequest):
         f16_kv=True,
         verbose=True,
         chat_format="chatml",
-        n_ctx=1024,
-        n_gpu_layers=20,
+        n_ctx=768,
+        n_gpu_layers=10,
     )
 
-    # Generator function to stream responses to the client
-    async def stream_response():
-        explanation = ""
+    explanation = ""
 
-        # Stream explanation from the LLM
-        async for stream_response in code_llm.create_chat_completion(explanation_messages, temperature=0.1, stream=True):
-            if 'content' in stream_response["choices"][0]["delta"]:
-                explanation_part = stream_response["choices"][0]["delta"]['content']
-                explanation += explanation_part
-                yield explanation_part  # Send each part as it comes in
+    # Stream explanation from the LLM
+    for stream_response in code_llm.create_chat_completion(explanation_messages, temperature=0.1, stream=True):
+        if 'content' in stream_response["choices"][0]["delta"]:
+            explanation_part = stream_response["choices"][0]["delta"]['content']
+            explanation += explanation_part
+            print(explanation, end="", flush=True)
+            yield "data: " + explanation_part + "\n\n"
 
-        # Send a message indicating that we are moving to similarity search
-        yield "\n¶¶¶ Similarity search starting ¶¶¶\n"
+    # Send a message indicating that we are moving to similarity search
+    yield "\n¶¶¶ Similarity search starting ¶¶¶\n"
 
-        # Call find_similar internally
-        similarity_request = SimilarityRequest(code=request.code, problem_id=request.problem_id)
-        similarity_result = await find_similar(similarity_request)
+    # Call find_similar internally
+    similarity_request = SimilarityRequest(code=request.code, problem_id=request.problem_id)
+    similarity_result = find_similar(similarity_request)
 
-        mistake = None
+    mistake = None
 
-        print(similarity_result)
-        # Check similarity result and possibly set a mistake
-        if similarity_result["similarity_score"] < 0.2:
-            mistake = similarity_result["bug_description"]
-            print("Going with the mistake")
+    print(similarity_result)
+    # Check similarity result and possibly set a mistake
+    if similarity_result["similarity_score"] < 0.2:
+        mistake = similarity_result["bug_description"]
+        print("Going with the mistake")
 
-        yield f"\nMost similar problem bug description: {similarity_result['bug_description']}, similarity score: {similarity_result['similarity_score']}\n"
+    yield f"\nMost similar problem bug description: {similarity_result['bug_description']}, similarity score: {similarity_result['similarity_score']}\n"
 
-        # Send another separator for transitioning to the hint section
-        yield "\n¶¶¶ Hint generation starting ¶¶¶\n"
+    # Send another separator for transitioning to the hint section
+    yield "\n¶¶¶ Hint generation starting ¶¶¶\n"
 
-        # Create messages for hint generation
-        raw_hint_messages = [
-            {
-                "role": "system",
-                "content": f"""
-                You are an assistant that helps users debug their code by identifying logical issues. 
-                Your role is to point out logical errors and provide hints. Do not provide full solutions,
-                but guide the user to the solution. The problem they are solving is:
-                {problem.description}
-                IMPORTANT: DO NOT PROVIDE A FULL SOLUTION!
-                """
-            },
-            {
-                "role": "user",
-                "content": f"""
-                This is my code for {problem.title}, but it doesn't seem to work. Can you describe exactly what 
-                the code is doing, without giving the correct solution?:
-                {user_code}
+    # Create messages for hint generation
+    raw_hint_messages = [
+        {
+            "role": "system",
+            "content": f"""
+            You are an assistant that helps users debug their code by identifying logical issues. 
+            Your role is to point out logical errors and provide hints. Do not provide full solutions,
+            but guide the user to the solution. The problem they are solving is:
+            {problem.description}
+            IMPORTANT: DO NOT PROVIDE A FULL SOLUTION!
+            """
+        },
+        {
+            "role": "user",
+            "content": f"""
+            This is my code for {problem.title}, but it doesn't seem to work. Can you describe exactly what 
+            the code is doing, without giving the correct solution?:
+            {user_code}
 
-                Based on this explanation, here's what you said:
-                {explanation}
+            Based on this explanation, here's what you said:
+            {explanation}
 
-                This is the correct code:
-                {correct_code}
+            This is the correct code:
+            {correct_code}
 
-                EXPLANATION OF THE CORRECT CODE USE THIS TO GUIDE YOUR RESPONSE, BY CONTRASTING IT WITH THE USER CODE:
-                {problem.solution_explanation}
+            EXPLANATION OF THE CORRECT CODE USE THIS TO GUIDE YOUR RESPONSE, BY CONTRASTING IT WITH THE USER CODE:
+            {problem.solution_explanation}
 
-                Now, can you help me identify what might be wrong? 
-                What should I think about to correct the issue? Keep the correct code explanation in mind.
-                IMPORTANT: DON'T PROVIDE THE FULL CODE
+            Now, can you help me identify what might be wrong? 
+            What should I think about to correct the issue? Keep the correct code explanation in mind.
+            IMPORTANT: DON'T PROVIDE THE FULL CODE
 
-                INSTRUCTION: Now provide a brief hint, without giving everything away. AND DO NOT PROVIDE THE FULL SOLUTION OR ASK ME TO TEST CERTAIN CASES.
-                """
-            }
-        ]
+            INSTRUCTION: Now provide a brief hint, without giving everything away. AND DO NOT PROVIDE THE FULL SOLUTION OR ASK ME TO TEST CERTAIN CASES.
+            """
+        }
+    ]
 
-        hint_messages = raw_hint_messages if mistake is None else [
-            {
-                "role": "system",
-                "content": f"""
-                You are an assistant that helps users debug their code by identifying logical issues. 
-                Your role is to point out logical errors and provide hints. Do not provide full solutions,
-                but guide the user to the solution. We have an idea of where the user is going wrong. The problem they are solving is:
-                {problem.description}
-                IMPORTANT: DO NOT PROVIDE A FULL SOLUTION!
-                """
-            },
-            {
-                "role": "user",
-                "content": f"""
-                This is my code for {problem.title}, but it doesn't seem to work. Can you describe exactly what 
-                the code is doing, without giving the correct solution?:
-                {user_code}
+    hint_messages = raw_hint_messages if mistake is None else [
+        {
+            "role": "system",
+            "content": f"""
+            You are an assistant that helps users debug their code by identifying logical issues. 
+            Your role is to point out logical errors and provide hints. Do not provide full solutions,
+            but guide the user to the solution. We have an idea of where the user is going wrong. The problem they are solving is:
+            {problem.description}
+            IMPORTANT: DO NOT PROVIDE A FULL SOLUTION!
+            """
+        },
+        {
+            "role": "user",
+            "content": f"""
+            This is my code for {problem.title}, but it doesn't seem to work. Can you describe exactly what 
+            the code is doing, without giving the correct solution?:
+            {user_code}
 
-                Based on this explanation, here's what you said:
-                {explanation}
+            Based on this explanation, here's what you said:
+            {explanation}
 
-                This is the pitfall I could be falling into is:
-                {mistake}
+            This is the pitfall I could be falling into is:
+            {mistake}
 
-                Now, can you help me identify what might be wrong in my code? 
-                What should I think about to correct the issue? Keep the pitfall above in mind.
-                IMPORTANT: DON'T PROVIDE THE FULL CODE
+            Now, can you help me identify what might be wrong in my code? 
+            What should I think about to correct the issue? Keep the pitfall above in mind.
+            IMPORTANT: DON'T PROVIDE THE FULL CODE
 
-                INSTRUCTION: Now provide a brief hint, without giving everything away. AND DO NOT PROVIDE THE FULL SOLUTION OR ASK ME TO TEST CERTAIN CASES.
-                """
-            }
-        ]
+            INSTRUCTION: Now provide a brief hint, without giving everything away. AND DO NOT PROVIDE THE FULL SOLUTION OR ASK ME TO TEST CERTAIN CASES.
+            """
+        }
+    ]
 
-        # Stream hint generation from the LLM
-        async for stream_response in code_llm.create_chat_completion(hint_messages, stream=True):
-            if 'content' in stream_response["choices"][0]["delta"]:
-                yield stream_response["choices"][0]["delta"]['content']
+    # Stream hint generation from the LLM
+    for stream_response in code_llm.create_chat_completion(hint_messages, stream=True):
+        if 'content' in stream_response["choices"][0]["delta"]:
+            hint = stream_response["choices"][0]["delta"]['content']
+            print(hint, end="", flush=True)
+            yield "data: " + hint + "\n\n"
 
+    del code_llm
+
+@app.post("/generate_hint/")
+async def generate_hint(request: CodeExecutionRequest):
     # Return a streaming response
-    return StreamingResponse(stream_response(), media_type="text/plain")
+    return StreamingResponse(stream_response(request), media_type="text/event-stream")
 
 
 # Request model for embedding input
@@ -415,7 +420,7 @@ class SimilarityRequest(BaseModel):
     problem_id: int
 
 @app.post("/find_similar/")
-async def find_similar(request: SimilarityRequest):
+def find_similar(request: SimilarityRequest):
     inputs = app.tokenizer.encode(request.code, return_tensors="pt").cpu()
     
     with torch.no_grad():
