@@ -40,12 +40,29 @@ const Problem = () => {
   );
   const [testResults, setTestResults] = useState<any[]>([]);
   const [consoleOutput, setConsoleOutput] = useState<any[]>([]);
+  const [loadingTestCases, setLoadingTestCases] = useState<boolean>(true);
 
   useEffect(() => {
     if (problem) {
       setCode(generateInitialCode(problem.arguments)); // Reset code to initial code when problem changes
+
+      // Fetch the test cases for the selected problem
+      fetchTestCases(problem.id);
     }
   }, [problem]);
+
+  const fetchTestCases = async (problemId: number) => {
+    try {
+      const response = await axios.get(
+        `http://localhost:8000/problems/${problemId}/test_cases`
+      );
+      setTestResults(response.data); // Store the test cases for later use
+      setLoadingTestCases(false);
+    } catch (error) {
+      console.error("Error fetching test cases:", error);
+      setLoadingTestCases(false);
+    }
+  };
 
   const handleEditorDidMount = (
     editor: import("monaco-editor").editor.IStandaloneCodeEditor
@@ -54,12 +71,13 @@ const Problem = () => {
   };
 
   const executeCode = async () => {
-    if (editorRef.current) {
+    if (editorRef.current && !loadingTestCases) {
       const currentCode = editorRef.current.getValue();
 
       try {
         const response = await axios.post("http://localhost:8000/execute/", {
           code: currentCode,
+          problem_id: problem.id, // Pass the problem ID
         });
 
         const result = response.data;
@@ -88,7 +106,7 @@ const Problem = () => {
         console.error("Error during code execution:", error);
       }
     } else {
-      console.error("Editor is not available");
+      console.error("Editor is not available or test cases are still loading");
     }
   };
 
@@ -172,27 +190,31 @@ const Problem = () => {
                 <TabsContent value="testCases" className="h-full flex-grow">
                   <ScrollArea className="h-full w-full overflow-y-auto ml-2">
                     <div className="pb-14">
-                      {testResults.map((result, index) => (
-                        <div key={index} className="mb-2">
-                          <div>
-                            <strong>Inputs:</strong>{" "}
-                            {JSON.stringify(result.inputs)}
+                      {testResults.length > 0 ? (
+                        testResults.map((result, index) => (
+                          <div key={index} className="mb-2">
+                            <div>
+                              <strong>Inputs:</strong>{" "}
+                              {JSON.stringify(result.inputs)}
+                            </div>
+                            <div>
+                              <strong>Expected:</strong> {result.expected}
+                            </div>
+                            <div>
+                              <strong>Result:</strong> {result.result}
+                            </div>
+                            <div>
+                              <strong>Passed:</strong>{" "}
+                              {result.passed ? "✅" : "❌"}
+                            </div>
+                            {index < testResults.length - 1 && (
+                              <Separator className="my-2 bg-[#333333]" />
+                            )}
                           </div>
-                          <div>
-                            <strong>Expected:</strong> {result.expected}
-                          </div>
-                          <div>
-                            <strong>Result:</strong> {result.result}
-                          </div>
-                          <div>
-                            <strong>Passed:</strong>{" "}
-                            {result.passed ? "✅" : "❌"}
-                          </div>
-                          {index < testResults.length - 1 && (
-                            <Separator className="my-2 bg-[#333333]" />
-                          )}
-                        </div>
-                      ))}
+                        ))
+                      ) : (
+                        <p>No test cases available.</p>
+                      )}
                     </div>
                   </ScrollArea>
                 </TabsContent>

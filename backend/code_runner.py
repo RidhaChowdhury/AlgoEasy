@@ -10,16 +10,21 @@ def run_tests(solution):
     for inputs, expected in test_cases:
         try:
             result = solution(*inputs)
+
+            # Cast both result and expected to strings for comparison
+            result_str = str(result)
+            expected_str = str(expected)
+
             results.append({
                 'inputs': inputs,
-                'expected': expected,
-                'result': result,
-                'passed': result == expected
+                'expected': expected_str,
+                'result': result_str,
+                'passed': result_str == expected_str
             })
         except Exception as e:
             results.append({
                 'inputs': inputs,
-                'expected': expected,
+                'expected': str(expected),
                 'result': str(e),
                 'passed': False
             })
@@ -27,13 +32,10 @@ def run_tests(solution):
     return results
 
 def generate_test_cases():
-    return [
-        ((1,), "1"),
-        ((3,), "Fizz"),
-        ((5,), "Buzz"),
-        ((15,), "FizzBuzz"),
-        ((4,), "4")
-    ]
+    # Example test cases will be read from the test_cases.json file in this case
+    with open("test_cases.json", "r") as f:
+        test_cases = json.load(f)
+    return test_cases
 
 if __name__ == "__main__":
     import user_code  # Directly import the user's code
