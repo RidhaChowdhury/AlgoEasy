@@ -2,7 +2,12 @@ import { useLocation } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
-import { PlayCircle, ReceiptText, CircleSlash, BotMessageSquare } from "lucide-react"; // Importing icons
+import {
+  PlayCircle,
+  ReceiptText,
+  CircleSlash,
+  BotMessageSquare,
+} from "lucide-react";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -19,7 +24,7 @@ type Problem = {
   id: number;
   title: string;
   description: string;
-  arguments: string; // Arguments for the solution function
+  arguments: string;
 };
 
 // Define the structure for test case data
@@ -30,9 +35,8 @@ type TestCase = {
 
 const Problem = () => {
   const editorRef = useRef<any>(null);
-
   const location = useLocation();
-  const { problem } = location.state || {}; // Get the problem data from location state
+  const { problem } = location.state || {};
 
   const [code, setCode] = useState(
     problem ? `def solution(${problem.arguments}):\n    pass\n` : ""
@@ -41,6 +45,8 @@ const Problem = () => {
   const [selectedTestCaseIndex, setSelectedTestCaseIndex] = useState<number>(0);
   const [loadingTestCases, setLoadingTestCases] = useState<boolean>(true);
   const [executionResults, setExecutionResults] = useState<any[]>([]);
+  const [aiResponses, setAiResponses] = useState<string[]>([]);
+  const [isLoadingHint, setIsLoadingHint] = useState<boolean>(false);
 
   useEffect(() => {
     if (problem) {
@@ -49,7 +55,6 @@ const Problem = () => {
     }
   }, [problem]);
 
-  // Fetch test cases for the selected problem
   const fetchTestCases = async (problemId: number) => {
     try {
       const response = await axios.get(
@@ -71,8 +76,6 @@ const Problem = () => {
           problem_id: problem.id,
         });
         const result = response.data;
-
-        // Handle test cases and console output from the execution
         if (result.test_cases) {
           setExecutionResults(result.test_cases);
         }
@@ -82,56 +85,55 @@ const Problem = () => {
     }
   };
 
-    const getHint = async () => {
-      if (!loadingTestCases) {
-        try {
-          const response = await axios.post(
-            "http://localhost:8000/generate_hint/",
-            {
-              code: code,
-              problem_id: problem.id,
-            },
-            {
-              headers: {
-                "Content-Type": "application/json",
-              },
-            }
-          );
-          const result = response.data;
+  const getHint = async () => {
+    if (!loadingTestCases) {
+      setIsLoadingHint(true);
+      try {
+        const response = await axios.post(
+          "http://localhost:8000/generate_hint/",
+          {
+            code: code,
+            problem_id: problem.id,
+          },
+          {
+            responseType: "stream",
+          }
+        );
 
-          console.log(result);
-        } catch (error) {
-          console.error("Error during code execution:", error);
+        const reader = response.data.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Split the buffer by ¶¶¶ and update state
+          const parts = buffer.split("¶¶¶");
+          if (parts.length > 1) {
+            setAiResponses((prev) => [...prev, ...parts.slice(0, -1)]);
+            buffer = parts[parts.length - 1];
+          }
         }
-      }
-    };
 
-    const getSimilarity = async () => {
-      if (!loadingTestCases) {
-        try {
-          const response = await axios.post(
-            "http://localhost:8000/find_similar/",
-            {
-              code: code,
-              problem_id: problem.id,
-            },
-            {
-              headers: {
-                "Content-Type": "application/json",
-              },
-            }
-          );
-          const result = response.data;
-
-          console.log(result);
-        } catch (error) {
-          console.error("Error during code execution:", error);
+        // Add any remaining content in the buffer
+        if (buffer.trim()) {
+          setAiResponses((prev) => [...prev, buffer.trim()]);
         }
+      } catch (error) {
+        console.error("Error getting hint:", error);
+        setAiResponses((prev) => [
+          ...prev,
+          "Error fetching hint. Please try again.",
+        ]);
+      } finally {
+        setIsLoadingHint(false);
       }
-    };
+    }
+  };
 
-
-  // Get console output (stdout and stderr) for the selected test case
   const getConsoleOutputForTestCase = (testCaseIndex: number) => {
     const selectedResult = executionResults[testCaseIndex];
     if (!selectedResult) {
@@ -151,29 +153,63 @@ const Problem = () => {
     ];
   };
 
-  // Get button background color based on test case result
   const getTestCaseButtonColor = (index: number) => {
-    if (!executionResults.length) return "bg-gray-700"; // Not run yet
+    if (!executionResults.length) return "bg-gray-700";
     const result = executionResults[index]?.test_result?.passed;
     if (result === true) return "bg-green-600";
     if (result === false) return "bg-red-600";
-    return "bg-gray-700"; // Not run yet
+    return "bg-gray-700";
   };
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#303940] text-[#d4d4d4]">
       <ResizablePanelGroup direction="horizontal" className="flex-1">
-        {/* Left Panel: Problem Description */}
+        {/* Left Panel: Problem Description and AI Hint */}
         <ResizablePanel
           defaultSize={25}
           className="bg-[#303940] text-[#d4d4d4]"
         >
-          <div className="h-full p-4">
-            <h2 className="text-xl font-semibold mb-4">
-              {problem?.title || "Problem"}
-            </h2>
-            <p>{problem?.description || "Select a problem from the list."}</p>
-          </div>
+          <ResizablePanelGroup direction="vertical">
+            {/* Problem Description */}
+            <ResizablePanel defaultSize={50}>
+              <div className="h-full p-4">
+                <h2 className="text-xl font-semibold mb-4">
+                  {problem?.title || "Problem"}
+                </h2>
+                <p>
+                  {problem?.description || "Select a problem from the list."}
+                </p>
+              </div>
+            </ResizablePanel>
+            <ResizableHandle />
+            {/* AI Hint Panel */}
+            <ResizablePanel defaultSize={50}>
+              <div className="h-full p-4 flex flex-col">
+                <h3 className="text-lg font-semibold mb-2">AI Hint</h3>
+                <ScrollArea className="flex-grow mb-4">
+                  {aiResponses.map((response, index) => (
+                    <div key={index} className="mb-2">
+                      <p>{response}</p>
+                      {index < aiResponses.length - 1 && (
+                        <Separator className="my-2" />
+                      )}
+                    </div>
+                  ))}
+                  {isLoadingHint && <p>Loading hint...</p>}
+                </ScrollArea>
+                <div className="">
+                  <Button
+                    onClick={getHint}
+                    className="bg-[#547c97] p-2 w-full"
+                    disabled={isLoadingHint}
+                  >
+                    <BotMessageSquare className="w-6 h-6 mr-2 text-white" />
+                    {isLoadingHint ? "Getting hint..." : "I need a hint!"}
+                  </Button>
+                </div>
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
         </ResizablePanel>
         <ResizableHandle />
 
@@ -202,15 +238,7 @@ const Problem = () => {
                 </div>
                 {/* Play Button Overlay */}
                 <div className="absolute top-2 right-4 z-10 flex flex-row gap-2">
-                  <Button onClick={getHint} className="bg-[#547c97] p-2">
-                    <BotMessageSquare className="w-6 h-6 text-white" />
-                  </Button>
-
                   <Button onClick={executeCode} className="bg-[#007acc] p-2">
-                    <PlayCircle className="w-6 h-6 text-white" />
-                  </Button>
-
-                  <Button onClick={getSimilarity} className="bg-[#cc3d00] p-2">
                     <PlayCircle className="w-6 h-6 text-white" />
                   </Button>
                 </div>
@@ -308,7 +336,6 @@ const Problem = () => {
                                   {log.message}
                                 </span>
                               </div>
-                              {/* Separator for each console log or error */}
                               <Separator className="my-2 opacity-50" />
                             </div>
                           )

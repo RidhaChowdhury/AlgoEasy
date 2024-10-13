@@ -23,11 +23,14 @@ Base = declarative_base()
 # Define the models for Problem and Test Case
 class Problem(Base):
     __tablename__ = "problems"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, index=True)
     description = Column(String)
     arguments = Column(String)
+    solution_code = Column(String)  # New field for the solution code
+    solution_explanation = Column(String)  # New field for the solution explanation
+
 
 class TestCase(Base):
     __tablename__ = "test_cases"
@@ -106,7 +109,7 @@ app.add_middleware(
 def get_problems():
     db = SessionLocal()
     problems = db.query(Problem).all()
-    return [{"id": p.id, "title": p.title, "description": p.description, "arguments": p.arguments} for p in problems]
+    return [{"id": p.id, "title": p.title, "description": p.description, "arguments": p.arguments, "solution_code": p.solution_code, "solution_explanation": p.solution_explanation} for p in problems]
 
 # Fetch a specific problem with its test cases
 @app.get("/problems/{problem_id}")
@@ -122,6 +125,8 @@ def get_problem(problem_id: int):
         "title": problem.title,
         "description": problem.description,
         "arguments": problem.arguments,
+        "solution_code": problem.solution_code,  # Include the solution code
+        "solution_explanation": problem.solution_explanation,  # Include the solution explanation
         "test_cases": [
             {"inputs": json.loads(tc.inputs), "expected_output": tc.expected_output}
             for tc in test_cases
@@ -145,7 +150,7 @@ def get_test_cases_for_problem(problem_id: int):
 @app.post("/execute/")
 def execute_code(request: CodeExecutionRequest):
     import pyperclip
-    pyperclip.copy(request.code.replace('\n', '\\n'))
+    pyperclip.copy(request.code.replace('\n', '\\n').replace('"', "'"))
     db = SessionLocal()
     
     # Fetch the problem and test cases from the database
@@ -218,8 +223,12 @@ def execute_code(request: CodeExecutionRequest):
             os.remove(temp_test_case_file)
 
 # Add route to generate a hint using the pre-loaded Llama model
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
+import asyncio
+
 @app.post("/generate_hint/")
-def generate_hint(request: CodeExecutionRequest):
+async def generate_hint(request: CodeExecutionRequest):
     db = SessionLocal()
     
     # Fetch the problem description from the database
@@ -227,61 +236,10 @@ def generate_hint(request: CodeExecutionRequest):
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    # # Execute the code to get output
-    # execute_response = execute_code(request)
-    
-    # failing_test_case = None
-    # # Get the first test case's results from the execution response
-    # for case in execute_response['test_cases']:
-    #     print(case)
-    #     if case['test_result']['passed'] == False:
-    #         failing_test_case = case
-
-    # if not failing_test_case:
-    #     raise HTTPException(status_code=500, detail="No test case results found")
-
-    # # Extract stdout and stderr from the first test case
-    # stdout = failing_test_case.get('stdout', [])
-    # stderr = failing_test_case.get('stderr', [])
-
-    # # Combine the problem description, user code, and the first test case's output
-    # problem_description = problem.description
-    # code_output = "\n".join(stdout + stderr)
+    print(vars(problem))
     user_code = request.code
+    correct_code = problem.solution_code.encode('utf-8').decode('unicode_escape')
 
-    # # Add test case data
-    # failed_input = str(failing_test_case['test_result']['inputs'])
-    # failed_expected = str(failing_test_case['test_result']['expected'])
-    # failed_result = str(failing_test_case['test_result']['result'])
-
-    # Access the pre-loaded Llama model from the app state
-
-    problem_description = """
-    Write a function that returns 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 
-    and 'FizzBuzz' for multiples of both 3 and 5. If a number is not divisible by either, 
-    return the number itself as a string.
-    """
-
-    correct_code = """
-    def solution(n: int):
-        if n % 3 == 0 and n % 5 == 0:
-            return "FizzBuzz"
-        elif n % 3 == 0:
-            return "Fizz"
-        elif n % 5 == 0:
-            return "Buzz"
-        else:
-            return str(n)
-    """
-
-    correct_code_explanation = """
-    The correct FizzBuzz solution works as follows:
-    1. The first condition checks if the number is divisible by both 3 and 5 (using `n % 3 == 0 and n % 5 == 0`). This catches numbers like 15, 30, etc., returning "FizzBuzz".
-    2. The second condition checks if the number is divisible by only 3. If it is, it returns "Fizz".
-    3. The third condition checks if the number is divisible by only 5. If it is, it returns "Buzz".
-    4. If none of these conditions are met, the function returns the number itself as a string.
-    The order of these conditions is crucial to avoid redundant checks and to ensure that "FizzBuzz" is checked first.
-    """
 
     # First message to describe what the user's code is doing
     explanation_messages = [
@@ -291,104 +249,139 @@ def generate_hint(request: CodeExecutionRequest):
             You are an assistant that helps users debug their code by identifying logical issues. 
             Your goal is to explain exactly what the user's code is doing, step by step.
             The problem they are solving is:
-            {problem_description}
-            IMPORTANT: DO NOT DO ANYTHING MORE THAN BREAKING DOWN THE USER'S CODE, DO NOT EXPLAIN THE PROBLEM AGAIN TO THEM, DO NOT PROPOSE IMPROVEMENTS.
+            {problem.description}
+            IMPORTANT: DO NOT DO ANYTHING MORE THAN BREAKING DOWN THE USER'S CODE, DO NOT EXPLAIN THE PROBLEM AGAIN TO ME, DO NOT PROPOSE IMPROVEMENTS.
             """
         },
         {
             "role": "user",
             "content": f"""
-            This is my code for FizzBuzz, but it doesn't seem to work. Describe exactly what 
+            This is my code for {problem.title}, but it doesn't seem to work. Describe exactly what 
             the code is doing, without giving the correct solution. JUST EXPLAIN WHAT THE CODE IS DOING STEP BY STEP NOW
             {user_code}
-            IMPORTANT: DO NOT DO ANYTHING MORE THAN BREAKING DOWN THE USER'S CODE, DO NOT EXPLAIN THE PROBLEM AGAIN TO THEM, DO NOT PROPOSE IMPROVEMENTS.
+            IMPORTANT: DO NOT DO ANYTHING MORE THAN BREAKING DOWN THE USER'S CODE, DO NOT EXPLAIN THE PROBLEM AGAIN TO ME, DO NOT PROPOSE IMPROVEMENTS.
             """
         }
     ]
 
-    # Variable to store the explanation
-    explanation = ""
-
-    # Start the timer for the explanation
-    import time
-    start_time_explanation = time.time()
-
     code_llm = Llama(
         model_path="C:/Users/chowd/ProgrammingProjects/AlgoEasy/backend/Code-Llama-3-8B-Q8_0.gguf",
-        f16_kv=True,  # MUST set to True to avoid issues after a few calls
+        f16_kv=True,
         verbose=True,
         chat_format="chatml",
         n_ctx=1024,
         n_gpu_layers=20,
     )
 
-    # Call the LLM to get the explanation and stream/aggregate the response
-    print("### Explanation ###")
-    for stream_response in code_llm.create_chat_completion(explanation_messages, temperature=0.1, stream=True):
-        if 'content' in stream_response["choices"][0]["delta"]:
-            # Aggregate the explanation into a variable and print as it's being streamed
-            explanation_part = stream_response["choices"][0]["delta"]['content']
-            print(explanation_part, end="", flush=True)
-            explanation += explanation_part
+    # Generator function to stream responses to the client
+    async def stream_response():
+        explanation = ""
 
-    # End the timer for the explanation
-    end_time_explanation = time.time()
-    explanation_time = end_time_explanation - start_time_explanation
-    print(f"\n\nExplanation generated in {explanation_time:.2f} seconds.")
+        # Stream explanation from the LLM
+        async for stream_response in code_llm.create_chat_completion(explanation_messages, temperature=0.1, stream=True):
+            if 'content' in stream_response["choices"][0]["delta"]:
+                explanation_part = stream_response["choices"][0]["delta"]['content']
+                explanation += explanation_part
+                yield explanation_part  # Send each part as it comes in
 
-    # Second message to provide a hint based on the explanation and the correct code
-    hint_messages = [
-        {
-            "role": "system",
-            "content": f"""
-            You are an assistant that helps users debug their code by identifying logical issues. 
-            Your role is to point out logical errors and provide hints. Do not provide full solutions,
-            but guide the user to the solution. The problem they are solving is:
-            {problem_description}
-            IMPORTANT: DO NOT PROVIDE A FULL SOLUTION!
-            """
-        },
-        {
-            "role": "user",
-            "content": f"""
-            This is my code for FizzBuzz, but it doesn't seem to work. Can you describe exactly what 
-            the code is doing, without giving the correct solution?:
-            {user_code}
+        # Send a message indicating that we are moving to similarity search
+        yield "\n¶¶¶ Similarity search starting ¶¶¶\n"
 
-            Based on this explanation, here's what you said:
-            {explanation}
+        # Call find_similar internally
+        similarity_request = SimilarityRequest(code=request.code, problem_id=request.problem_id)
+        similarity_result = await find_similar(similarity_request)
 
-            This is the correct code:
-            {correct_code}
+        mistake = None
 
-            EXPLANATION OF THE CORRECT CODE USE THIS TO GUIDE YOUR RESPONSE, BY CONTRASTING IT WITH THE USER CODE:
-            {correct_code_explanation}
+        print(similarity_result)
+        # Check similarity result and possibly set a mistake
+        if similarity_result["similarity_score"] < 0.2:
+            mistake = similarity_result["bug_description"]
+            print("Going with the mistake")
 
-            Now, can you help me identify what might be wrong? 
-            What should I think about to correct the issue? Keep the correct code explanation in mind.
-            IMPORTANT: DON'T PROVIDE THE FULL CODE
+        yield f"\nMost similar problem bug description: {similarity_result['bug_description']}, similarity score: {similarity_result['similarity_score']}\n"
 
-            INSTRUCTION: Now provide a brief hint, without giving everything away. AND DO NOT PROVIDE THE FULL SOLUTION OR ASK THEM TO TEST CERTAIN CASES.
-            """
-        }
-    ]
+        # Send another separator for transitioning to the hint section
+        yield "\n¶¶¶ Hint generation starting ¶¶¶\n"
 
-    # Start the timer for the hint
-    start_time_hint = time.time()
+        # Create messages for hint generation
+        raw_hint_messages = [
+            {
+                "role": "system",
+                "content": f"""
+                You are an assistant that helps users debug their code by identifying logical issues. 
+                Your role is to point out logical errors and provide hints. Do not provide full solutions,
+                but guide the user to the solution. The problem they are solving is:
+                {problem.description}
+                IMPORTANT: DO NOT PROVIDE A FULL SOLUTION!
+                """
+            },
+            {
+                "role": "user",
+                "content": f"""
+                This is my code for {problem.title}, but it doesn't seem to work. Can you describe exactly what 
+                the code is doing, without giving the correct solution?:
+                {user_code}
 
-    # Call the LLM to get the hint
-    print("\n\n### Hint ###")
-    for stream_response in code_llm.create_chat_completion(hint_messages, stream=True):
-        if 'content' in stream_response["choices"][0]["delta"]:
-            print(stream_response["choices"][0]["delta"]['content'], end="", flush=True)
+                Based on this explanation, here's what you said:
+                {explanation}
 
-    # End the timer for the hint
-    end_time_hint = time.time()
-    hint_time = end_time_hint - start_time_hint
-    print(f"\n\nHint generated in {hint_time:.2f} seconds.")
+                This is the correct code:
+                {correct_code}
 
+                EXPLANATION OF THE CORRECT CODE USE THIS TO GUIDE YOUR RESPONSE, BY CONTRASTING IT WITH THE USER CODE:
+                {problem.solution_explanation}
 
-    # return {"hint": hint}
+                Now, can you help me identify what might be wrong? 
+                What should I think about to correct the issue? Keep the correct code explanation in mind.
+                IMPORTANT: DON'T PROVIDE THE FULL CODE
+
+                INSTRUCTION: Now provide a brief hint, without giving everything away. AND DO NOT PROVIDE THE FULL SOLUTION OR ASK ME TO TEST CERTAIN CASES.
+                """
+            }
+        ]
+
+        hint_messages = raw_hint_messages if mistake is None else [
+            {
+                "role": "system",
+                "content": f"""
+                You are an assistant that helps users debug their code by identifying logical issues. 
+                Your role is to point out logical errors and provide hints. Do not provide full solutions,
+                but guide the user to the solution. We have an idea of where the user is going wrong. The problem they are solving is:
+                {problem.description}
+                IMPORTANT: DO NOT PROVIDE A FULL SOLUTION!
+                """
+            },
+            {
+                "role": "user",
+                "content": f"""
+                This is my code for {problem.title}, but it doesn't seem to work. Can you describe exactly what 
+                the code is doing, without giving the correct solution?:
+                {user_code}
+
+                Based on this explanation, here's what you said:
+                {explanation}
+
+                This is the pitfall I could be falling into is:
+                {mistake}
+
+                Now, can you help me identify what might be wrong in my code? 
+                What should I think about to correct the issue? Keep the pitfall above in mind.
+                IMPORTANT: DON'T PROVIDE THE FULL CODE
+
+                INSTRUCTION: Now provide a brief hint, without giving everything away. AND DO NOT PROVIDE THE FULL SOLUTION OR ASK ME TO TEST CERTAIN CASES.
+                """
+            }
+        ]
+
+        # Stream hint generation from the LLM
+        async for stream_response in code_llm.create_chat_completion(hint_messages, stream=True):
+            if 'content' in stream_response["choices"][0]["delta"]:
+                yield stream_response["choices"][0]["delta"]['content']
+
+    # Return a streaming response
+    return StreamingResponse(stream_response(), media_type="text/plain")
+
 
 # Request model for embedding input
 class EmbeddingRequest(BaseModel):
@@ -446,7 +439,5 @@ async def find_similar(request: SimilarityRequest):
         "bug_description": bug_description,
         "similarity_score": distance  # Now a Python float
     }
-
-    print(data)
 
     return data
