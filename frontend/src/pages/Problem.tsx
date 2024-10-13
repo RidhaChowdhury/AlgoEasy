@@ -1,6 +1,5 @@
 import { useLocation } from "react-router-dom";
 import { useRef, useState, useEffect } from "react";
-import Editor from "@monaco-editor/react";
 import { Button } from "@/components/ui/button";
 import axios from "axios";
 import { PlayCircle } from "lucide-react";
@@ -12,6 +11,9 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import CodeMirror from "@uiw/react-codemirror";
+import { python } from "@codemirror/lang-python";
+import { sublime } from "@uiw/codemirror-themes-all";
 
 // Define the Problem type
 type Problem = {
@@ -22,9 +24,7 @@ type Problem = {
 };
 
 const Problem = () => {
-  const editorRef = useRef<
-    import("monaco-editor").editor.IStandaloneCodeEditor | null
-  >(null);
+  const editorRef = useRef<any>(null);
 
   const location = useLocation();
   const { problem } = location.state || {}; // Get the problem data from location state
@@ -64,19 +64,11 @@ const Problem = () => {
     }
   };
 
-  const handleEditorDidMount = (
-    editor: import("monaco-editor").editor.IStandaloneCodeEditor
-  ) => {
-    editorRef.current = editor;
-  };
-
   const executeCode = async () => {
-    if (editorRef.current && !loadingTestCases) {
-      const currentCode = editorRef.current.getValue();
-
+    if (!loadingTestCases) {
       try {
         const response = await axios.post("http://localhost:8000/execute/", {
-          code: currentCode,
+          code: code,
           problem_id: problem.id, // Pass the problem ID
         });
 
@@ -106,17 +98,17 @@ const Problem = () => {
         console.error("Error during code execution:", error);
       }
     } else {
-      console.error("Editor is not available or test cases are still loading");
+      console.error("Test cases are still loading");
     }
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#1e1e1e] text-[#d4d4d4]">
+    <div className="h-screen w-screen flex flex-col bg-[#303940] text-[#d4d4d4]">
       <ResizablePanelGroup direction="horizontal" className="flex-1">
         {/* Left Panel: Problem Description */}
         <ResizablePanel
           defaultSize={25}
-          className="bg-[#1e1e1e] text-[#d4d4d4] h-full"
+          className="bg-[#303940] text-[#d4d4d4] h-full"
         >
           <div className="h-full p-4">
             <h2 className="text-xl font-semibold mb-4">
@@ -129,59 +121,57 @@ const Problem = () => {
         {/* Right Panel: Editor and Test Results */}
         <ResizablePanel
           defaultSize={75}
-          className="bg-[#1e1e1e] text-[#d4d4d4] h-full flex flex-col"
+          className="bg-[#303940] text-[#d4d4d4] h-full flex flex-col"
         >
           <ResizablePanelGroup direction="vertical" className="flex-1">
             {/* Top Right: Editor with header */}
             <ResizablePanel
               defaultSize={60}
-              className="bg-[#1e1e1e] flex flex-col"
+              className="bg-[#303940] flex flex-col relative" // Add relative positioning
             >
               <div className="flex flex-col h-full">
-                {/* Header bar with problem name and play button */}
-                <div className="flex justify-between items-center px-4 py-2 bg-[#252526]">
-                  <p className="text-lg font-semibold">
-                    {problem?.title || "Problem"}
-                  </p>
+                {/* CodeMirror Editor */}
+                <CodeMirror
+                  value={code}
+                  height="100%"
+                  extensions={[python()]}
+                  theme={sublime}
+                  onChange={(value: string) => setCode(value)}
+                  style={{ overflowY: "auto", height: "100%" }}
+                  basicSetup={{
+                    lineNumbers: true,
+                    autocompletion: true,
+                  }}
+                />
+                {/* Play Button Overlay */}
+                <div className="absolute top-2 right-4 z-10">
                   <Button onClick={executeCode} className="bg-[#007acc] p-2">
                     <PlayCircle className="w-6 h-6 text-white" />
                   </Button>
                 </div>
-                {/* Monaco Editor */}
-                <Editor
-                  height="100%"
-                  language="python"
-                  theme="vs-dark"
-                  value={code}
-                  onMount={handleEditorDidMount}
-                  onChange={(newValue: string | undefined) =>
-                    setCode(newValue || "")
-                  }
-                  options={{
-                    automaticLayout: true,
-                    fontSize: 14,
-                    scrollBeyondLastLine: false,
-                  }}
-                />
               </div>
             </ResizablePanel>
             <ResizableHandle />
             {/* Bottom Bar: Tabs with Test Case Results and Console Output */}
             <ResizablePanel
               defaultSize={40}
-              className="bg-[#1e1e1e] text-[#d4d4d4] flex-grow"
+              className="bg-[#303940] text-[#d4d4d4] flex-grow"
             >
               <Tabs defaultValue="testCases" className="h-full">
-                <TabsList className="m-2 bg-[#252526] rounded-lg">
+                <TabsList className="m-2 bg-[#3c474f] rounded-lg">
                   <TabsTrigger
                     value="testCases"
-                    className="text-gray-300 data-[state=active]:bg-[#696969] data-[state=active]:text-white px-4 py-2 rounded-md"
+                    className="px-4 py-2 rounded-md text-gray-300 transition-all duration-200 ease-in-out
+      data-[state=active]:bg-[#1E252A] data-[state=active]:text-white
+      data-[state=inactive]:bg-transparent data-[state=inactive]:text-gray-400"
                   >
                     Test Cases
                   </TabsTrigger>
                   <TabsTrigger
                     value="console"
-                    className="text-gray-300 data-[state=active]:bg-[#696969] data-[state=active]:text-white px-4 py-2 rounded-md"
+                    className="px-4 py-2 rounded-md text-gray-300 transition-all duration-200 ease-in-out
+      data-[state=active]:bg-[#1E252A] data-[state=active]:text-white
+      data-[state=inactive]:bg-transparent data-[state=inactive]:text-gray-400"
                   >
                     Console Output
                   </TabsTrigger>
