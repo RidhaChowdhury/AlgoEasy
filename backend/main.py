@@ -9,6 +9,10 @@ from sqlalchemy import create_engine, Column, Integer, String, ForeignKey
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.ext.declarative import declarative_base
 from llama_cpp import Llama
+import faiss
+import numpy as np
+from transformers import AutoModel, AutoTokenizer
+import torch
 
 # Set up the database connection
 DATABASE_URL = "postgresql://postgres:yourpassword@localhost:5432/problems_db"
@@ -44,8 +48,41 @@ class CodeExecutionRequest(BaseModel):
     code: str
     problem_id: int
 
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
+import faiss
+import os
+import json
+from transformers import AutoTokenizer, AutoModel
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Attach the raw checkpoint directly, forcing everything to CPU
+    app.tokenizer = AutoTokenizer.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True)
+    app.model = AutoModel.from_pretrained("Salesforce/codet5p-110m-embedding", trust_remote_code=True).to("cpu")  # Force CPU
+
+    # FAISS index loading or initialization
+    if os.path.exists("faiss_index.idx"):
+        app.faiss_index = faiss.read_index("faiss_index.idx")
+    else:
+        app.faiss_index = faiss.IndexFlatL2(256)  # Set based on the embedding size (adjust as needed)
+
+    # Load embedding data
+    if os.path.exists("embeddings_data.json"):
+        with open("embeddings_data.json", 'r') as f:
+            app.embeddings_data = json.load(f)
+    else:
+        app.embeddings_data = []
+
+    yield  # Start the application lifecycle here
+
+    # Save FAISS index and embedding data after the app finishes
+    faiss.write_index(app.faiss_index, "faiss_index.idx")
+    with open("embeddings_data.json", 'w') as f:
+        json.dump(app.embeddings_data, f)
+
 # Set up FastAPI with lifespan
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 # Set up CORS middleware
 app.add_middleware(
@@ -99,6 +136,8 @@ def get_test_cases_for_problem(problem_id: int):
 # Add route to execute code
 @app.post("/execute/")
 def execute_code(request: CodeExecutionRequest):
+    import pyperclip
+    pyperclip.copy(request.code.replace('\n', '\\n'))
     db = SessionLocal()
     
     # Fetch the problem and test cases from the database
@@ -342,3 +381,36 @@ def generate_hint(request: CodeExecutionRequest):
 
 
     # return {"hint": hint}
+
+# Request model for embedding input
+class EmbeddingRequest(BaseModel):
+    problem_id: int
+    code: str
+    bug_description: str
+
+@app.post("/add_embedding/")
+async def add_embedding(request: EmbeddingRequest):
+    # Tokenize and encode the code snippet using app's tokenizer
+    inputs = app.tokenizer.encode(request.code, return_tensors="pt").cpu()  # Ensure it's on CPU
+    
+    # Generate embeddings on the CPU
+    with torch.no_grad():
+        embedding = app.model(inputs)[0].cpu().numpy()
+
+    # Check the shape of the embedding and ensure it's 2D
+    if len(embedding.shape) == 1:
+        embedding = embedding.reshape(1, -1)  # Reshape to (1, d) if it's a single embedding
+
+    # Add the embedding to FAISS (ensure embedding is in float32)
+    app.faiss_index.add(embedding.astype('float32'))
+    
+    # Store the problem ID and bug description in parallel with the embedding
+    app.embeddings_data.append({
+        "problem_id": request.problem_id,
+        "bug_description": request.bug_description
+    })
+
+    print(app.faiss_index.ntotal)
+    print(len(app.embeddings_data))
+
+    return {"message": "Embedding added successfully"}
