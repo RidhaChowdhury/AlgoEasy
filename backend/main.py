@@ -44,28 +44,8 @@ class CodeExecutionRequest(BaseModel):
     code: str
     problem_id: int
 
-# Lifespan context manager to load and unload the LLM model
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Load the LLM model on app startup and attach it to the app
-    app.ml_models = {}
-    app.ml_models["llama_model"] = Llama(
-        model_path="C:/Users/chowd/ProgrammingProjects/AlgoEasy/backend/Code-Llama-3-8B-Q8_0.gguf",
-        f16_kv=True,  # MUST set to True to avoid issues after a few calls
-        verbose=True,
-        chat_format="chatml",
-        n_ctx=1024,
-        n_gpu_layers=20
-    )
-    print("Llama model loaded.")
-    yield
-    # Clean up LLM model on shutdown
-    del app.ml_models["llama_model"]
-    app.ml_models.clear()
-    print("Llama model unloaded.")
-
 # Set up FastAPI with lifespan
-app = FastAPI(lifespan=lifespan)
+app = FastAPI()
 
 # Set up CORS middleware
 app.add_middleware(
@@ -200,59 +180,41 @@ def generate_hint(request: CodeExecutionRequest):
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found")
 
-    # Execute the code to get output
-    execute_response = execute_code(request)
+    # # Execute the code to get output
+    # execute_response = execute_code(request)
     
-    failing_test_case = None
-    # Get the first test case's results from the execution response
-    for case in execute_response['test_cases']:
-        print(case)
-        if case['test_result']['passed'] == False:
-            failing_test_case = case
+    # failing_test_case = None
+    # # Get the first test case's results from the execution response
+    # for case in execute_response['test_cases']:
+    #     print(case)
+    #     if case['test_result']['passed'] == False:
+    #         failing_test_case = case
 
-    if not failing_test_case:
-        raise HTTPException(status_code=500, detail="No test case results found")
+    # if not failing_test_case:
+    #     raise HTTPException(status_code=500, detail="No test case results found")
 
-    # Extract stdout and stderr from the first test case
-    stdout = failing_test_case.get('stdout', [])
-    stderr = failing_test_case.get('stderr', [])
+    # # Extract stdout and stderr from the first test case
+    # stdout = failing_test_case.get('stdout', [])
+    # stderr = failing_test_case.get('stderr', [])
 
-    # Combine the problem description, user code, and the first test case's output
-    problem_description = problem.description
-    code_output = "\n".join(stdout + stderr)
+    # # Combine the problem description, user code, and the first test case's output
+    # problem_description = problem.description
+    # code_output = "\n".join(stdout + stderr)
     user_code = request.code
 
-    # Add test case data
-    failed_input = str(failing_test_case['test_result']['inputs'])
-    failed_expected = str(failing_test_case['test_result']['expected'])
-    failed_result = str(failing_test_case['test_result']['result'])
+    # # Add test case data
+    # failed_input = str(failing_test_case['test_result']['inputs'])
+    # failed_expected = str(failing_test_case['test_result']['expected'])
+    # failed_result = str(failing_test_case['test_result']['result'])
 
     # Access the pre-loaded Llama model from the app state
-    llm = app.ml_models["llama_model"]
 
-    # Define a prompt to generate the hint
-    # prompt = f"""
-    # [INST] <<SYS>>
-    # You are helping a student with the following problem. Provide guidance based on the problem description, their code, the console output, and the failed test case.
-    # <</SYS>>
+    problem_description = """
+    Write a function that returns 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, 
+    and 'FizzBuzz' for multiples of both 3 and 5. If a number is not divisible by either, 
+    return the number itself as a string.
+    """
 
-    # Problem Description: {problem_description}
-
-    # Their Code:
-    # {user_code}
-
-    # The console output from running the code:
-    # {code_output}
-
-    # A failing test case takes the following input:
-    # {failed_input}
-    # Expects this output:
-    # {failed_expected}
-    # But got this output:
-    # {failed_result}
-
-    # Based on the problem description, their code, the console output, and the failed test case, provide a helpful hint on what might be wrong with their implementation and how they can improve it. [/INST]
-    # """
     correct_code = """
     def solution(n: int):
         if n % 3 == 0 and n % 5 == 0:
@@ -265,21 +227,34 @@ def generate_hint(request: CodeExecutionRequest):
             return str(n)
     """
 
+    correct_code_explanation = """
+    The correct FizzBuzz solution works as follows:
+    1. The first condition checks if the number is divisible by both 3 and 5 (using `n % 3 == 0 and n % 5 == 0`). This catches numbers like 15, 30, etc., returning "FizzBuzz".
+    2. The second condition checks if the number is divisible by only 3. If it is, it returns "Fizz".
+    3. The third condition checks if the number is divisible by only 5. If it is, it returns "Buzz".
+    4. If none of these conditions are met, the function returns the number itself as a string.
+    The order of these conditions is crucial to avoid redundant checks and to ensure that "FizzBuzz" is checked first.
+    """
+
     # First message to describe what the user's code is doing
     explanation_messages = [
         {
             "role": "system",
-            "content": """
+            "content": f"""
             You are an assistant that helps users debug their code by identifying logical issues. 
-            Your goal is to explain exactly what the user's code is doing, step by step. DO NOT DO ANY MORE TAHN BREAKING DOWN THE USERS CODE.
+            Your goal is to explain exactly what the user's code is doing, step by step.
+            The problem they are solving is:
+            {problem_description}
+            IMPORTANT: DO NOT DO ANYTHING MORE THAN BREAKING DOWN THE USER'S CODE, DO NOT EXPLAIN THE PROBLEM AGAIN TO THEM, DO NOT PROPOSE IMPROVEMENTS.
             """
         },
         {
             "role": "user",
             "content": f"""
-            This is my code for FizzBuzz, but it doesn't seem to work. Can you describe exactly what 
-            the code is doing, without giving the correct solution?:
+            This is my code for FizzBuzz, but it doesn't seem to work. Describe exactly what 
+            the code is doing, without giving the correct solution. JUST EXPLAIN WHAT THE CODE IS DOING STEP BY STEP NOW
             {user_code}
+            IMPORTANT: DO NOT DO ANYTHING MORE THAN BREAKING DOWN THE USER'S CODE, DO NOT EXPLAIN THE PROBLEM AGAIN TO THEM, DO NOT PROPOSE IMPROVEMENTS.
             """
         }
     ]
@@ -291,9 +266,18 @@ def generate_hint(request: CodeExecutionRequest):
     import time
     start_time_explanation = time.time()
 
+    code_llm = Llama(
+        model_path="C:/Users/chowd/ProgrammingProjects/AlgoEasy/backend/Code-Llama-3-8B-Q8_0.gguf",
+        f16_kv=True,  # MUST set to True to avoid issues after a few calls
+        verbose=True,
+        chat_format="chatml",
+        n_ctx=1024,
+        n_gpu_layers=20,
+    )
+
     # Call the LLM to get the explanation and stream/aggregate the response
     print("### Explanation ###")
-    for stream_response in llm.create_chat_completion(explanation_messages, stream=True):
+    for stream_response in code_llm.create_chat_completion(explanation_messages, temperature=0.1, stream=True):
         if 'content' in stream_response["choices"][0]["delta"]:
             # Aggregate the explanation into a variable and print as it's being streamed
             explanation_part = stream_response["choices"][0]["delta"]['content']
@@ -305,14 +289,16 @@ def generate_hint(request: CodeExecutionRequest):
     explanation_time = end_time_explanation - start_time_explanation
     print(f"\n\nExplanation generated in {explanation_time:.2f} seconds.")
 
-    # Second message to provide a hint based on the explanation
+    # Second message to provide a hint based on the explanation and the correct code
     hint_messages = [
         {
             "role": "system",
-            "content": """
+            "content": f"""
             You are an assistant that helps users debug their code by identifying logical issues. 
             Your role is to point out logical errors and provide hints. Do not provide full solutions,
-            but guide the user to the solution.
+            but guide the user to the solution. The problem they are solving is:
+            {problem_description}
+            IMPORTANT: DO NOT PROVIDE A FULL SOLUTION!
             """
         },
         {
@@ -325,8 +311,17 @@ def generate_hint(request: CodeExecutionRequest):
             Based on this explanation, here's what you said:
             {explanation}
 
+            This is the correct code:
+            {correct_code}
+
+            EXPLANATION OF THE CORRECT CODE USE THIS TO GUIDE YOUR RESPONSE, BY CONTRASTING IT WITH THE USER CODE:
+            {correct_code_explanation}
+
             Now, can you help me identify what might be wrong? 
-            What should I think about to correct the issue? Please keep the hint brief and don’t provide the correct code.
+            What should I think about to correct the issue? Keep the correct code explanation in mind.
+            IMPORTANT: DON'T PROVIDE THE FULL CODE
+
+            INSTRUCTION: Now provide a brief hint, without giving everything away. AND DO NOT PROVIDE THE FULL SOLUTION OR ASK THEM TO TEST CERTAIN CASES.
             """
         }
     ]
@@ -336,7 +331,7 @@ def generate_hint(request: CodeExecutionRequest):
 
     # Call the LLM to get the hint
     print("\n\n### Hint ###")
-    for stream_response in llm.create_chat_completion(hint_messages, stream=True):
+    for stream_response in code_llm.create_chat_completion(hint_messages, stream=True):
         if 'content' in stream_response["choices"][0]["delta"]:
             print(stream_response["choices"][0]["delta"]['content'], end="", flush=True)
 
