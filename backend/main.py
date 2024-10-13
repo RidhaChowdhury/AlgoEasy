@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
     # Load the LLM model on app startup and attach it to the app
     app.ml_models = {}
     app.ml_models["llama_model"] = Llama(
-        model_path="C:/Users/chowd/ProgrammingProjects/AlgoEasy/backend/codellama-7b-python.Q4_K_S.gguf",
+        model_path="C:/Users/chowd/ProgrammingProjects/AlgoEasy/backend/Code-Llama-3-8B-Q8_0.gguf",
         f16_kv=True,  # MUST set to True to avoid issues after a few calls
         verbose=True,
         chat_format="chatml",
@@ -253,41 +253,97 @@ def generate_hint(request: CodeExecutionRequest):
 
     # Based on the problem description, their code, the console output, and the failed test case, provide a helpful hint on what might be wrong with their implementation and how they can improve it. [/INST]
     # """
-    messages = [
+    correct_code = """
+    def solution(n: int):
+        if n % 3 == 0 and n % 5 == 0:
+            return "FizzBuzz"
+        elif n % 3 == 0:
+            return "Fizz"
+        elif n % 5 == 0:
+            return "Buzz"
+        else:
+            return str(n)
+    """
+
+    # First message to describe what the user's code is doing
+    explanation_messages = [
         {
             "role": "system",
             "content": """
-            You are an assistant helping users debug their FizzBuzz code. Your role is to guide them through debugging by asking questions and providing hints rather than offering full solutions. The task is to write a function that returns 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, and 'FizzBuzz' for multiples of both. Help the user think through their mistakes by pointing out specific problems or potential improvements, but never provide the exact correct code. Instead, give step-by-step reasoning that leads the user to solve the problem on their own.
+            You are an assistant that helps users debug their code by identifying logical issues. 
+            Your goal is to explain exactly what the user's code is doing, step by step. DO NOT DO ANY MORE TAHN BREAKING DOWN THE USERS CODE.
             """
         },
         {
             "role": "user",
             "content": f"""
-            This is my code for FizzBuzz, but it doesn't seem to work. Can you help me identify what might be wrong without giving the full solution? What should I think about?:
+            This is my code for FizzBuzz, but it doesn't seem to work. Can you describe exactly what 
+            the code is doing, without giving the correct solution?:
             {user_code}
-            """
-        },
-        {
-            "role": "assistant",
-            "content": """
-            Here's how you should assist the user:
-
-            - **First hint**: "Does the order of your conditions matter in this case?"
-            - **Second hint**: "How could you structure your conditions to avoid checking for one value before checking for both?"
-            - **Third hint**: "Would rearranging the conditions prevent unreachable code?"
-
-            Problem Description: Write a function that returns 'Fizz' for multiples of 3, 'Buzz' for multiples of 5, and 'FizzBuzz' for multiples of both. Based on this description, ask guiding questions to help the user improve their logic rather than providing the full answer.
             """
         }
     ]
 
+    # Variable to store the explanation
+    explanation = ""
+
+    # Start the timer for the explanation
+    import time
+    start_time_explanation = time.time()
+
+    # Call the LLM to get the explanation and stream/aggregate the response
+    print("### Explanation ###")
+    for stream_response in llm.create_chat_completion(explanation_messages, stream=True):
+        if 'content' in stream_response["choices"][0]["delta"]:
+            # Aggregate the explanation into a variable and print as it's being streamed
+            explanation_part = stream_response["choices"][0]["delta"]['content']
+            print(explanation_part, end="", flush=True)
+            explanation += explanation_part
+
+    # End the timer for the explanation
+    end_time_explanation = time.time()
+    explanation_time = end_time_explanation - start_time_explanation
+    print(f"\n\nExplanation generated in {explanation_time:.2f} seconds.")
+
+    # Second message to provide a hint based on the explanation
+    hint_messages = [
+        {
+            "role": "system",
+            "content": """
+            You are an assistant that helps users debug their code by identifying logical issues. 
+            Your role is to point out logical errors and provide hints. Do not provide full solutions,
+            but guide the user to the solution.
+            """
+        },
+        {
+            "role": "user",
+            "content": f"""
+            This is my code for FizzBuzz, but it doesn't seem to work. Can you describe exactly what 
+            the code is doing, without giving the correct solution?:
+            {user_code}
+
+            Based on this explanation, here's what you said:
+            {explanation}
+
+            Now, can you help me identify what might be wrong? 
+            What should I think about to correct the issue? Please keep the hint brief and don’t provide the correct code.
+            """
+        }
+    ]
+
+    # Start the timer for the hint
+    start_time_hint = time.time()
+
+    # Call the LLM to get the hint
+    print("\n\n### Hint ###")
+    for stream_response in llm.create_chat_completion(hint_messages, stream=True):
+        if 'content' in stream_response["choices"][0]["delta"]:
+            print(stream_response["choices"][0]["delta"]['content'], end="", flush=True)
+
+    # End the timer for the hint
+    end_time_hint = time.time()
+    hint_time = end_time_hint - start_time_hint
+    print(f"\n\nHint generated in {hint_time:.2f} seconds.")
 
 
-    print(messages)
-
-    # Generate the hint using the LLM
-    hint = llm.create_chat_completion(messages)
-
-    print(hint)
-
-    return {"hint": hint}
+    # return {"hint": hint}
